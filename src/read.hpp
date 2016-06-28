@@ -1,5 +1,5 @@
 /*!
- * @file Read.hpp
+ * @file read.hpp
  *
  * @brief Read class header file
  */
@@ -10,11 +10,14 @@
 #include <memory>
 #include <string>
 
+#include "bioparser/src/bioparser.hpp"
+
 namespace RALAY {
 
 class Read;
-std::unique_ptr<Read> createRead(uint32_t id, const std::string& sequence,
-    const std::string& quality);
+std::unique_ptr<Read> createRead(uint32_t id, const char* name, uint32_t name_length,
+    const char* sequence, uint32_t sequence_length, const char* quality,
+    uint32_t quality_length);
 
 class Read {
 public:
@@ -25,6 +28,10 @@ public:
         return id_;
     }
 
+    const std::string& name() const {
+        return name_;
+    }
+
     const std::string& sequence() const {
         return sequence_;
     }
@@ -33,16 +40,21 @@ public:
         return quality_;
     }
 
-    friend std::unique_ptr<Read> createRead(uint32_t id, const std::string& sequence,
-        const std::string& quality);
+    friend std::unique_ptr<Read> createRead(uint32_t id, const char* name,
+        uint32_t name_length, const char* sequence, uint32_t sequence_length,
+        const char* quality, uint32_t quality_length);
+
+    friend BIOPARSER::FastqReader<Read>;
 
 private:
 
-    Read(uint32_t id, const std::string& sequence, const std::string& quality);
+    Read(uint32_t id, const char* name, uint32_t name_length, const char* sequence,
+        uint32_t sequence_length, const char* quality, uint32_t quality_length);
     Read(const Read&) = delete;
     const Read& operator=(const Read&) = delete;
 
     uint32_t id_;
+    std::string name_;
     std::string sequence_;
     std::string quality_;
 };

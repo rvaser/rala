@@ -6,10 +6,11 @@ NAME = ralay
 
 OBJ_DIR = obj
 SRC_DIR = src
+VND_DIR = vendor
 DOC_DIR = doc
 EXC_DIR = bin
 
-I_CMD = $(addprefix -I, $(SRC_DIR))
+I_CMD = $(addprefix -I, $(SRC_DIR) $(VND_DIR))
 L_CMD = $(addprefix -L, )
 
 CP_FLAGS = $(I_CMD) -O3 -Wall -std=c++11

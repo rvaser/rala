@@ -11,10 +11,14 @@
 
 namespace RALAY {
 
-class Graph;
+class Read;
 class Overlap;
-std::unique_ptr<Graph> createGraph(const std::vector<std::unique_ptr<Overlap>>& overlaps);
+class Graph;
+std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
+    const std::vector<std::shared_ptr<Overlap>>& overlaps);
 
+class Node;
+class Edge;
 class Graph {
 public:
 
@@ -22,13 +26,18 @@ public:
 
     void print() const;
 
-    friend std::unique_ptr<Graph> createGraph(const std::vector<std::unique_ptr<Overlap>>& overlaps);
+    friend std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
+        const std::vector<std::shared_ptr<Overlap>>& overlaps);
 
 private:
 
-    Graph(const std::vector<std::unique_ptr<Overlap>>& overlaps);
+    Graph(const std::vector<std::shared_ptr<Read>>& reads,
+        const std::vector<std::shared_ptr<Overlap>>& overlaps);
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
+
+    std::vector<std::unique_ptr<Node>> nodes_;
+    std::vector<std::unique_ptr<Edge>> edges_;
 };
 
 }

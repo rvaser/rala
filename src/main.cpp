@@ -1,17 +1,28 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <algorithm>
 
+#include <unordered_set>
+
+#include "overlap.hpp"
+#include "graph.hpp"
 #include "read.hpp"
+#include "bioparser/src/bioparser.hpp"
 
 using namespace RALAY;
 
 int main(int argc, char** argv) {
 
-    printf("Oh look is dat boi! OH SHITT WADDUP?!\n");
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    auto reader = BIOPARSER::createMhapReader<Overlap>(argv[1]);
+    reader->read_objects(overlaps, 1000000000);
 
-    auto read = createRead(0, "wtf", "hju");
+    std::vector<std::shared_ptr<Read>> reads;
+    auto qreader = BIOPARSER::createFastqReader<Read>(argv[2]);
+    qreader->read_objects(reads, 1000000000);
 
-    printf("%d %s %s\n", read->id(), read->sequence().c_str(), read->quality().c_str());
+    auto graph = createGraph(reads, overlaps);
+    graph->print();
 
     return 0;
 }
