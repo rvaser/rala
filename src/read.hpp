@@ -24,7 +24,7 @@ public:
 
     ~Read() {};
 
-    int id() const {
+    uint32_t id() const {
         return id_;
     }
 
