@@ -13,7 +13,9 @@
 namespace RALAY {
 
 constexpr uint32_t kMaxOverhang = 1000;
-constexpr float kMaxOverhangToOverlapRatio = 0.8;
+constexpr double kMaxOverhangToOverlapRatio = 0.8;
+constexpr double kTransitiveEdgeEps = 0.12;
+constexpr double kShortLongOverlapRatio = 0.57;
 
 void trimReads(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps) {
 
@@ -204,9 +206,8 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
 Graph::~Graph() {
 }
 
-void Graph::simplify() {
+void Graph::remove_isolated_nodes() {
 
-    // remove nodes wihtout edges
     for (uint32_t i = 0; i < nodes_.size(); ++i) {
         if (nodes_[i] == nullptr) {
             continue;
@@ -215,82 +216,88 @@ void Graph::simplify() {
             nodes_[i].reset();
         }
     }
+}
 
-    // remove transitive edges (inspired by Myers 1995 & 2005)
-    const double eps = 0.12;
-    auto is_similar = [&](double x, double y) -> bool {
-        return (x >= y * (1 - eps) && x <= y * (1 + eps));
+void Graph::remove_transitive_edges() {
+
+    auto is_similar = [&](double a, double b, double eps) -> bool {
+        return (a >= b * (1 - eps) && a <= b * (1 + eps));
     };
 
     std::vector<Edge*> candidate_edge(nodes_.size(), nullptr);
 
-    for (uint32_t v = 0; v < nodes_.size(); v += 2) {
-        if (nodes_[v] == nullptr) continue;
+    for (uint32_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i] == nullptr) continue;
 
-        for (const auto& it: nodes_[v]->suffix_edges) {
+        for (const auto& it: nodes_[i]->suffix_edges) {
             candidate_edge[it->end_node->id] = it;
         }
 
-        for (const auto& it: nodes_[v]->suffix_edges) {
-            uint32_t w = it->end_node->id;
-            for (const auto& it2: nodes_[w]->suffix_edges) {
-                uint32_t x = it2->end_node->id;
-                if (candidate_edge[x] != nullptr) {
-                    fprintf(stderr, "%u (%u) -> %u (%u)-> %u (%u)\n", v, nodes_[v]->length(), w, nodes_[w]->length(), x, nodes_[x]->length());
-                    fprintf(stderr, "%u -> %u (%d)\n", v, w, it->length());
-                    fprintf(stderr, "%u -> %u (%d)\n", w, x, it2->length());
-                    fprintf(stderr, "%u -> %u (%d)\n", v, x, candidate_edge[x]->length());
-                    if (is_similar(it->length() + it2->length(), candidate_edge[x]->length())) {
-                        fprintf(stderr, "WE DID IT REDIT\n");
-                        candidate_edge[x]->mark = true;
-                        candidate_edge[x]->pair->mark = true;
+        for (const auto& it: nodes_[i]->suffix_edges) {
+            uint32_t j = it->end_node->id;
+            for (const auto& it2: nodes_[j]->suffix_edges) {
+                uint32_t k = it2->end_node->id;
+                if (candidate_edge[k] != nullptr && candidate_edge[k]->mark == false) {
+                    if (is_similar(it->length() + it2->length(), candidate_edge[k]->length(), kTransitiveEdgeEps)) {
+                        candidate_edge[k]->mark = true;
+                        candidate_edge[k]->pair->mark = true;
                     }
                 }
             }
-
-            // remove short overlaps
-            /*uint32_t v_length = nodes_[v]->length();
-            const double max_ratio = 0.7;
-            for (const auto& it2: nodes_[v]->suffix_edges()) {
-                if (it == it2) continue;
-                if (edges_[it2] == nullptr) continue;
-                if (reduce[it] || reduce[it2]) continue;
-
-                if (edges_[it]->length() <= edges_[it2]->length()) {
-                    fprintf(stderr, "%u -> %u && %u -> %u\n", v, edges_[it]->end_node_id(), v, edges_[it2]->end_node_id());
-                    if ((v_length - edges_[it2]->length()) / (double) (v_length - edges_[it]->length()) < max_ratio) {
-                        fprintf(stderr, "WE DID IT REDIT 2nd!\n");
-                        reduce[it2] = true;
-                    }
-                }
-            }*/
         }
 
-        for (const auto& it: nodes_[v]->suffix_edges) {
+        for (const auto& it: nodes_[i]->suffix_edges) {
             candidate_edge[it->end_node->id] = nullptr;
         }
     }
 
+    remove_marked_edges();
+}
+
+void Graph::remove_long_edges() {
+
+    for (uint32_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i] == nullptr) continue;
+        uint32_t node_length = nodes_[i]->length();
+
+        for (const auto& it: nodes_[i]->suffix_edges) {
+            for (const auto& it2: nodes_[i]->suffix_edges) {
+                if (it->id == it2->id) continue;
+                if (it->mark == true || it2->mark == true) continue;
+                if (it->length() <= it2->length()) {
+                    if ((node_length - it2->length()) / (double) (node_length - it->length()) < kShortLongOverlapRatio) {
+                        it2->mark = true;
+                        it2->pair->mark = true;
+                    }
+                }
+            }
+        }
+    }
+
+    remove_marked_edges();
+}
+
+void Graph::remove_bubbles() {
+
+}
+
+void Graph::remove_marked_edges() {
+
+    auto delete_edges = [&](std::list<Edge*>& edges) -> void {
+        auto it = edges.begin();
+        while (it != edges.end()) {
+            if ((*it)->mark == true) {
+                it = edges.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    };
+
     for (const auto& it: nodes_) {
         if (it == nullptr) continue;
-
-        auto it2 = it->prefix_edges.begin();
-        while (it2 != it->prefix_edges.end()) {
-            if ((*it2)->mark == true) {
-                it2 = it->prefix_edges.erase(it2);
-            } else {
-                ++it2;
-            }
-        }
-
-        it2 = it->suffix_edges.begin();
-        while (it2 != it->suffix_edges.end()) {
-            if ((*it2)->mark == true) {
-                it2 = it->suffix_edges.erase(it2);
-            } else {
-                ++it2;
-            }
-        }
+        delete_edges(it->prefix_edges);
+        delete_edges(it->suffix_edges);
     }
 
     for (uint32_t i = 0; i < edges_.size(); ++i) {
@@ -308,7 +315,7 @@ void Graph::print() const {
 
     for (const auto& it: nodes_) {
         if (it == nullptr) continue;
-        printf("    %d [label = \"%u: +%u,-%u\"", it->id, it->id, it->in_degree(), it->out_degree());
+        printf("    %d [label = \"%u [%u]: +%u,-%u\"", it->id, it->id, it->length(), it->in_degree(), it->out_degree());
         if (it->rc == true) {
             printf(", style = filled, fillcolor = brown1]\n");
             printf("    %d -> %d [style = dotted, arrowhead = none]\n", it->id, it->id - 1);

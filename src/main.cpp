@@ -22,7 +22,9 @@ int main(int argc, char** argv) {
     qreader->read_objects(reads, 1000000000);
 
     auto graph = createGraph(reads, overlaps);
-    graph->simplify();
+    graph->remove_isolated_nodes();
+    graph->remove_transitive_edges();
+    // graph->remove_long_edges();
     graph->print();
 
     return 0;

@@ -28,10 +28,27 @@ public:
     ~Graph();
 
     /*
-     * @brief Simplifies graph without information loss
-     * @details Removes nodes with in_degree = out_degree = 0 and transitive edges
+     * @brief Removes nodes without edges (no information loss)
      */
-    void simplify();
+    void remove_isolated_nodes();
+
+    /*
+     * @brief Removes transitive edge (no information loss)
+     * (inspired by Myers 1995 & 2005)
+     */
+    void remove_transitive_edges();
+
+    /*
+     * @brief Removes long edges (i.e. small overlaps, possible information loss and graph fragmentation)
+     * (inspired by Li 2016)
+     */
+    void remove_long_edges();
+
+    /*
+     * @brief Removes bubbles (possible information loss and graph fragmentation)
+     * (inspired by Li 2016)
+     */
+    void remove_bubbles();
 
     /*
      * @brief Prints graph in graphviz format
@@ -47,6 +64,8 @@ private:
         const std::vector<std::shared_ptr<Overlap>>& overlaps);
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
+
+    void remove_marked_edges();
 
     class Node;
     class Edge;
