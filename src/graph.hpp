@@ -40,15 +40,28 @@ public:
 
     /*
      * @brief Removes long edges (i.e. small overlaps, possible information loss and graph fragmentation)
-     * (inspired by Li 2016)
+     * (Li 2016)
      */
     void remove_long_edges();
 
     /*
+     * @brief Removes tips (i.e. nodes with in_degree == 0 || out_degree == 0)
+     */
+    void remove_tips();
+
+    /*
+     * @brief Removes cycles (possible information loss)
+     * (Tarjan 1972)
+     */
+    void remove_cycles();
+
+    /*
      * @brief Removes bubbles (possible information loss and graph fragmentation)
-     * (inspired by Li 2016)
      */
     void remove_bubbles();
+
+    void print_contigs() const;
+    void create_unitigs();
 
     /*
      * @brief Prints graph in graphviz format
