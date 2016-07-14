@@ -8,20 +8,29 @@
 
 namespace RALAY {
 
-std::unique_ptr<Overlap> createOverlap(uint32_t id, const double* values,
-    uint32_t values_length) {
+std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
+    double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
+    uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length) {
 
-    return std::unique_ptr<Overlap>(new Overlap(id, values, values_length));
+    return std::unique_ptr<Overlap>(new Overlap(id, a_id, b_id, error, minmers,
+        a_rc, a_begin, a_end, a_length, b_rc, b_begin, b_end, b_length));
 }
 
-Overlap::Overlap(uint32_t id, const double* values, uint32_t values_length) :
-        id_(id), error_(values[2]), minmers_(values[3]), a_id_(values[0] - 1),
-        a_rc_(values[4]), a_begin_(values[5]), a_end_(values[6]),
-        a_length_(values[7]), b_id_(values[1] - 1), b_rc_(values[8]),
-        b_begin_(values[9]), b_end_(values[10]), b_length_(values[11]) {
+Overlap::Overlap(uint32_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
+    uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
+    uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length) :
+        id_(id), a_id_(a_id), a_rc_(a_rc), a_begin_(a_begin), a_end_(a_end), a_length_(a_length),
+        b_id_(b_id), b_rc_(b_rc), b_begin_(b_begin), b_end_(b_end), b_length_(b_length),
+        quality_(error), length_(std::max(a_end - a_begin, b_end - b_begin)),
+        matching_bases_((uint32_t) (length_ * quality_ + 0.499)) {
 }
 
 Overlap::~Overlap() {
+}
+
+bool Overlap::update(uint32_t a_begin, uint32_t a_end, uint32_t b_begin, uint32_t b_end) {
+
+    return false;
 }
 
 }
