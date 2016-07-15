@@ -15,8 +15,13 @@ class Read;
 class Overlap;
 /*
  * @brief Trims reads from both sides based on read to read overlaps
+ * (Li 2016)
  */
-void trimReads(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps);
+void trimReads(std::vector<std::shared_ptr<Read>>& reads,
+    std::vector<std::shared_ptr<Overlap>>& overlaps);
+
+void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,
+    const std::vector<std::shared_ptr<Overlap>>& overlaps);
 
 class Graph;
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,

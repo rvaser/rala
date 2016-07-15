@@ -41,9 +41,19 @@ public:
     }
 
     const std::string& rc() {
-        if (rc_.size() == 0) create_rc();
+        if (rc_.size() != sequence_.size()) create_rc();
         return rc_;
     }
+
+    double coverage() const {
+        return coverage_;
+    }
+
+    void set_coverage(double coverage) {
+        coverage_ = coverage;
+    }
+
+    void trim_sequence(uint32_t begin, uint32_t end);
 
     friend std::unique_ptr<Read> createRead(uint32_t id, const char* name,
         uint32_t name_length, const char* sequence, uint32_t sequence_length,
@@ -65,6 +75,7 @@ private:
     std::string sequence_;
     std::string quality_;
     std::string rc_;
+    double coverage_;
 };
 
 }

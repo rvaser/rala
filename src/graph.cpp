@@ -4,9 +4,11 @@
  * @brief Graph class source file
  */
 
+#include <set>
 #include <list>
 #include <stack>
 #include <deque>
+#include <math.h>
 
 #include "read.hpp"
 #include "overlap.hpp"
@@ -14,34 +16,148 @@
 
 namespace RALAY {
 
+constexpr uint32_t kMinOverlapLength = 2000;
+constexpr uint32_t kMinMatchingBases = 100;
+constexpr double kMinMatchingBasesPerc = 0.05;
+constexpr uint32_t kMinCoverage = 3;
 constexpr uint32_t kMaxOverhang = 1000;
 constexpr double kMaxOverhangToOverlapRatio = 0.8;
 constexpr double kTransitiveEdgeEps = 0.12;
-constexpr double kShortLongOverlapRatio = 0.57;
-constexpr uint32_t kMaxBubbleLength = 50000;
-constexpr uint32_t kMinUnitigSize = 4;
+constexpr double kShortLongOverlapRatio = 0.2;
+constexpr uint32_t kMaxBubbleLength = 250000;
+constexpr double kBubbleCoverageEps = 0.05;
+constexpr uint32_t kMinUnitigSize = 5;
 
+static bool isSimilar(double a, double b, double eps) {
+    return (a >= b * (1 - eps) && a <= b * (1 + eps));
+};
 
-void trimReads(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps) {
+void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,
+    const std::vector<std::shared_ptr<Overlap>>& overlaps) {
+
+    std::vector<uint32_t> coverage(reads.size(), 0);
+    for (const auto& overlap: overlaps) {
+
+        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
+            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
+            overlap->matching_bases() < kMinMatchingBases ||
+            overlap->quality() < kMinMatchingBasesPerc) {
+            continue;
+        }
+
+        uint32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin());
+        uint32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end());
+        coverage[overlap->a_id()] += end - begin;
+
+        begin = overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin();
+        end = overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end();
+        coverage[overlap->b_id()] += end - begin;
+    }
+
+    for (uint32_t i = 0; i < coverage.size(); ++i) {
+        reads[i]->set_coverage(coverage[i] / (double) reads[i]->sequence().size());
+    }
 }
 
-uint32_t classifyOverlap(const std::shared_ptr<Overlap>& ovl) {
+void trimReads(std::vector<std::shared_ptr<Read>>& reads,
+    std::vector<std::shared_ptr<Overlap>>& overlaps) {
 
-    uint32_t overhang = std::min(ovl->a_begin(), ovl->b_begin()) +
-        std::min(ovl->a_length() - ovl->a_end(), ovl->b_length() - ovl->b_end());
-    uint32_t overlap_length = std::max(ovl->a_end() - ovl->a_begin(),
-        ovl->b_end() - ovl->b_begin());
+    std::vector<std::vector<uint32_t>> coverage(reads.size());
+    uint32_t tot = 0, rtot = 0;
+    for (const auto& overlap: overlaps) {
 
-    if (overhang > std::min(kMaxOverhang, (uint32_t) (kMaxOverhangToOverlapRatio * overlap_length))) {
+        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
+            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
+            overlap->matching_bases() < kMinMatchingBases) {
+            continue;
+        }
+        ++tot;
+        if (overlap->quality() < kMinMatchingBasesPerc) {
+            continue;
+        }
+
+        if (coverage[overlap->a_id()].size() == 0) {
+            coverage[overlap->a_id()].resize(overlap->a_length(), 0);
+        }
+        uint32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin());
+        uint32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end());
+
+        for (uint32_t i = begin; i < end; ++i) {
+            ++coverage[overlap->a_id()][i];
+        }
+
+        if (coverage[overlap->b_id()].size() == 0) {
+            coverage[overlap->b_id()].resize(overlap->b_length(), 0);
+        }
+        begin = overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin();
+        end = overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end();
+
+        for (uint32_t i = begin; i < end; ++i) {
+            ++coverage[overlap->b_id()][i];
+        }
+    }
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Totaly: %u\n", tot);
+
+    fprintf(stderr, "Regions done\n");
+
+    for (uint32_t c = 0; c < coverage.size(); ++c) {
+        const auto& cov = coverage[c];
+        if (!cov.empty()) {
+            // find longest region with coverage at least kMinCoverage
+            std::vector<uint32_t> regions;
+            for (uint32_t i = 0; i < cov.size(); ++i) {
+                if (cov[i] >= kMinCoverage) {
+                    regions.push_back(i);
+                    for (uint32_t j = i + 1; j < cov.size(); ++j, ++i) {
+                        if (cov[j] < kMinCoverage) {
+                            regions.push_back(j);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (regions.size() % 2 != 0) {
+                regions.push_back(cov.size());
+            }
+
+            if (!regions.empty()) {
+                fprintf(stderr, "%d:", c + 1);
+                for (const auto& it: regions) {
+                    fprintf(stderr, " %u", it);
+                }
+                fprintf(stderr, "\n");
+                ++rtot;
+                //fprintf(stderr, "%s: %zu ->", reads[c]->name().c_str(), reads[c]->sequence().size());
+                reads[c]->trim_sequence(regions.front(), regions.back());
+                //fprintf(stderr, "%zu\n", reads[c]->sequence().size());
+            }
+        }
+
+        printf("@%s\n%s\n+\n%s\n",
+            reads[c]->name().c_str(),
+            reads[c]->sequence().c_str(),
+            reads[c]->quality().c_str());
+    }
+
+    fprintf(stderr, "Totaly r: %u\n", rtot);
+}
+
+uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
+
+    uint32_t overhang = std::min(overlap->a_begin(), overlap->b_begin()) +
+        std::min(overlap->a_length() - overlap->a_end(), overlap->b_length() - overlap->b_end());
+
+    if (overhang > std::min(kMaxOverhang, (uint32_t) (kMaxOverhangToOverlapRatio * overlap->length()))) {
         return 0; // internal match
     }
-    if (ovl->a_begin() <= ovl->b_begin() && (ovl->a_length() - ovl->a_end()) <= (ovl->b_length() - ovl->b_end())) {
+    if (overlap->a_begin() <= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) <= (overlap->b_length() - overlap->b_end())) {
         return 1; // a contained
     }
-    if (ovl->a_begin() >= ovl->b_begin() && (ovl->a_length() - ovl->a_end()) >= (ovl->b_length() - ovl->b_end())) {
+    if (overlap->a_begin() >= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) >= (overlap->b_length() - overlap->b_end())) {
         return 2; // b contained
     }
-    if (ovl->a_begin() > ovl->b_begin()) {
+    if (overlap->a_begin() > overlap->b_begin()) {
         return 3; // a to b overlap
     }
 
@@ -52,8 +168,8 @@ class Graph::Node {
 public:
     // Node encapsulating read
     Node(uint32_t _id, const std::shared_ptr<Read>& read) :
-            id(_id), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
-            prefix_edges(), suffix_edges(), scores() {
+            id(_id), read_id(read->id()), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
+            prefix_edges(), suffix_edges(), scores(1, read->coverage()), mark(false) {
     }
     // Unitig
     Node(uint32_t _id, Node* begin_node, Node* end_node);
@@ -75,7 +191,13 @@ public:
     }
 
     uint32_t unitig_size() const {
-        return scores.size() + 1;
+        return scores.size();
+    }
+
+    double coverage() const {
+        double cov = 0.0;
+        for (const auto& it: scores) cov += it;
+        return cov / scores.size();
     }
 
     bool is_junction() const {
@@ -87,11 +209,13 @@ public:
     }
 
     uint32_t id;
+    uint32_t read_id;
     Node* pair;
     std::string sequence;
     std::list<Edge*> prefix_edges;
     std::list<Edge*> suffix_edges;
     std::vector<double> scores;
+    bool mark;
 };
 
 class Graph::Edge {
@@ -99,7 +223,7 @@ public:
     Edge(uint32_t _id, const std::shared_ptr<Overlap>& overlap, Node* _begin_node,
         Node* _end_node, uint32_t type) :
             id(_id), pair(), begin_node(_begin_node), end_node(_end_node), length(),
-            score(overlap->error()), mark(false) {
+            score(overlap->quality()), mark(false) {
 
         uint32_t length_a = id % 2 == 0 ? overlap->a_begin() : overlap->a_length() - overlap->a_end();
         uint32_t length_b = id % 2 == 0 ? overlap->b_begin() : overlap->b_length() - overlap->b_end();
@@ -119,6 +243,10 @@ public:
         return begin_node->sequence.substr(0, length);
     }
 
+    uint32_t quality() const {
+        return (score * (begin_node->length() - length));
+    }
+
     uint32_t id;
     Edge* pair;
     Node* begin_node;
@@ -129,7 +257,7 @@ public:
 };
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
-        id(_id), pair(), sequence(), prefix_edges(), suffix_edges(), scores() {
+        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(), scores(), mark(false) {
 
     if (!begin_node->prefix_edges.empty()) {
         begin_node->prefix_edges.front()->end_node = this;
@@ -142,22 +270,18 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
         auto* edge = curr_node->suffix_edges.front();
         edge->mark = true;
 
-        if (!curr_node->scores.empty()) {
-            scores.insert(scores.begin(), curr_node->scores.begin(), curr_node->scores.end());
-        }
-        scores.push_back(edge->score);
+        scores.insert(scores.begin(), curr_node->scores.begin(), curr_node->scores.end());
         length += edge->length;
         sequence += edge->label();
 
         curr_node->prefix_edges.clear();
         curr_node->suffix_edges.clear();
+        curr_node->mark = true;
 
         curr_node = edge->end_node;
     }
 
-    if (!end_node->scores.empty()) {
-        scores.insert(scores.begin(), end_node->scores.begin(), end_node->scores.end());
-    }
+    scores.insert(scores.begin(), end_node->scores.begin(), end_node->scores.end());
     sequence += end_node->sequence;
 
     if (!end_node->suffix_edges.empty()) {
@@ -168,6 +292,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
 
     end_node->prefix_edges.clear();
     end_node->suffix_edges.clear();
+    end_node->mark = true;
 }
 
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
@@ -220,7 +345,13 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
     for (uint32_t i = 0; i < overlaps.size(); ++i) {
         const auto& overlap = overlaps[i];
         if (!is_contained[overlap->a_id()] && !is_contained[overlap->b_id()]) {
-            if (overlap_type[i] < 3 || overlap->error() < 0.05) {
+            if (overlap_type[i] < 3) {
+                continue;
+            }
+
+            if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
+                overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
+                overlap->matching_bases() < kMinMatchingBases) {
                 continue;
             }
 
@@ -262,6 +393,7 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
             }
         }
     }
+    fprintf(stderr, "NODES = %zu, HITS = %zu\n", nodes_.size(), edges_.size());
 }
 
 Graph::~Graph() {
@@ -273,7 +405,7 @@ void Graph::remove_isolated_nodes() {
         if (node == nullptr) {
             continue;
         }
-        if (node->in_degree() == 0 && node->out_degree() == 0) {
+        if ((node->in_degree() == 0 && node->out_degree() == 0 && node->unitig_size() < kMinUnitigSize) || (node->mark == true)) {
             // fprintf(stderr, "Removing isolated node: %d\n", node->id);
             node.reset();
         }
@@ -281,10 +413,6 @@ void Graph::remove_isolated_nodes() {
 }
 
 void Graph::remove_transitive_edges() {
-
-    auto is_similar = [&](double a, double b, double eps) -> bool {
-        return (a >= b * (1 - eps) && a <= b * (1 + eps));
-    };
 
     std::vector<Edge*> candidate_edge(nodes_.size(), nullptr);
 
@@ -299,7 +427,7 @@ void Graph::remove_transitive_edges() {
             for (const auto& edge_yz: nodes_[edge_xy->end_node->id]->suffix_edges) {
                 uint32_t z = edge_yz->end_node->id;
                 if (candidate_edge[z] != nullptr && candidate_edge[z]->mark == false) {
-                    if (is_similar(edge_xy->length + edge_yz->length, candidate_edge[z]->length, kTransitiveEdgeEps)) {
+                    if (isSimilar(edge_xy->length + edge_yz->length, candidate_edge[z]->length, kTransitiveEdgeEps)) {
                         candidate_edge[z]->mark = true;
                         candidate_edge[z]->pair->mark = true;
                     }
@@ -322,9 +450,10 @@ void Graph::remove_long_edges() {
 
         for (const auto& edge1: node->suffix_edges) {
             for (const auto& edge2: node->suffix_edges) {
-                if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true ) continue;
-                if (edge1->length <= edge2->length) {
-                    if ((edge2->begin_node->length() - edge2->length) / (double) (edge1->begin_node->length() - edge1->length) < kShortLongOverlapRatio) {
+                if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true) continue;
+                if (edge1->quality() > edge2->quality()) {
+                    if (edge2->quality() / (double) edge1->quality() < kShortLongOverlapRatio) {
+                        fprintf(stderr, "Removing :OOOO\n");
                         edge2->mark = true;
                         edge2->pair->mark = true;
                     }
@@ -342,31 +471,58 @@ void Graph::remove_tips() {
         if (node == nullptr || !node->is_tip()) continue;
 
         bool is_tip = true;
+        // bool is_only_tip = true;
         if (node->in_degree() == 0) {
-            for (const auto& edge: node->suffix_edges) {
+            /*for (const auto& edge: node->suffix_edges) {
                 if (edge->end_node->in_degree() < 2) {
                     is_tip = false;
                     break;
+                } else {
+                    for (const auto& edge2: edge->end_node->prefix_edges) {
+                        if (edge2->begin_node->id == node->id) continue;
+                        if (edge2->begin_node->is_tip()) {
+                            is_only_tip = false;
+                            if (edge2->begin_node->unitig_size() < node->unitig_size()) {
+                                is_tip = false;
+                                break;
+                            }
+                        }
+                    }
                 }
-            }
-            if (is_tip) {
+            }*/
+            if (is_tip) { //&& (is_only_tip || node->unitig_size() < kMinUnitigSize)) {
                 for (auto& edge: node->suffix_edges) {
                     edge->mark = true;
                     edge->pair->mark = true;
                 }
+                node->mark = true;
+                node->pair->mark = true;
             }
         } else if (node->out_degree() == 0) {
-            for (const auto& edge: node->prefix_edges) {
-                if (edge->end_node->out_degree() < 2) {
+            /*for (const auto& edge: node->prefix_edges) {
+                if (edge->begin_node->out_degree() < 2) {
                     is_tip = false;
                     break;
-                }
-            }
-            if (is_tip) {
+                } else {
+                   for (const auto& edge2: edge->begin_node->suffix_edges) {
+                       if (edge2->end_node->id == node->id) continue;
+                       if (edge2->end_node->is_tip()) {
+                           is_only_tip = false;
+                           if (edge2->end_node->unitig_size() < node->unitig_size()) {
+                               is_tip = false;
+                               break;
+                           }
+                       }
+                   }
+               }
+           }*/
+            if (is_tip) { //&& (is_only_tip || node->unitig_size() < kMinUnitigSize)) {
                 for (auto& edge: node->prefix_edges) {
                     edge->mark = true;
                     edge->pair->mark = true;
                 }
+                node->mark = true;
+                node->pair->mark = true;
             }
         }
 
@@ -503,9 +659,9 @@ void Graph::remove_bubbles() {
                 }
 
                 distance[w] = distance[v] + edge->length;
-                if (nodes_[w]->out_degree() != 0) {
+                //if (nodes_[w]->out_degree() != 0) {
                     queue.push_back(w);
-                }
+                //}
             }
         }
 
@@ -543,7 +699,7 @@ void Graph::remove_bubbles() {
             }
         }
 
-        fprintf(stderr, "Bubble (search from %d): %d -> %d\n", node->id, begin_id, end_id);
+        // fprintf(stderr, "Bubble (search from %d): %d -> %d\n", node->id, begin_id, end_id);
         if (begin_id == (uint32_t) end_id) {
             continue;
         }
@@ -584,58 +740,63 @@ void Graph::remove_bubbles() {
             }
         }
 
-        for (const auto& path: paths) {
+        /*for (const auto& path: paths) {
             for (const auto& v: path) {
                 fprintf(stderr, "%u ", v);
             }
             fprintf(stderr, "\n");
-        }
+        }*/
 
-        // remove the longest path
-        uint32_t max_path_len = 0;
-        uint32_t max_path_id = 0;
-        double min_path_sim = 5;
-        uint32_t min_path_id = 0;
+        // remove the worst path
+        double worst_path_coverage = 1000000.0;
+        uint32_t worst_path_quality = 0;
+        uint32_t worst_path_id = 0;
 
         for (uint32_t p = 0; p < paths.size(); ++p) {
-            uint32_t path_len = 0;
-            double path_sim = 5;
+            double coverage = 0;
+            uint32_t quality = 0;
             for (uint32_t i = 0; i < paths[p].size() - 1; ++i) {
-                const auto& node = nodes_[paths[p][i]];
-                for (const auto& edge: node->suffix_edges) {
-                    if (edge->end_node->id == paths[p][i+1]) {
-                        path_len += edge->length;
-                        if (i == 0) {
-                            path_sim = edge->score;
+                if (i == 0) {
+                    for (const auto& edge: node->suffix_edges) {
+                        if (edge->end_node->id == paths[p][i+1]) {
+                            quality = edge->quality();
+                            break;
                         }
-                        //path_sim = std::min(path_sim, edge->overlap->error());
                     }
+                } else {
+                    coverage += nodes_[paths[p][i]]->coverage();
                 }
             }
-            if (max_path_len < path_len) {
-                max_path_len = path_len;
-                max_path_id = p;
+
+            if (paths[p].size() > 2) {
+                coverage /= paths[p].size() - 2;
             }
-            if (min_path_sim > path_sim) {
-                min_path_sim = path_sim;
-                min_path_id = p;
+
+            if (isSimilar(worst_path_coverage, coverage, kBubbleCoverageEps)) {
+                if (worst_path_quality > quality) {
+                    worst_path_coverage = coverage;
+                    worst_path_quality = quality;
+                    worst_path_id = p;
+                }
+            } else if (worst_path_coverage > coverage) {
+                worst_path_coverage = coverage;
+                worst_path_quality = quality;
+                worst_path_id = p;
             }
         }
 
-        fprintf(stderr, "Worst path (len): %d, %d\n", max_path_id, max_path_len);
-        fprintf(stderr, "Worst path (err all): %d, %g\n", min_path_id, min_path_sim);
-
-        max_path_id = min_path_id;
+        //fprintf(stderr, "Worst path: %d, %g, %d\n", worst_path_id, worst_path_coverage,
+        //    worst_path_quality);
 
         bool has_external_edges = false;
-        for (uint32_t i = 0; i < paths[max_path_id].size() - 1; ++i) {
-            const auto& node = nodes_[paths[max_path_id][i]];
+        for (uint32_t i = 0; i < paths[worst_path_id].size() - 1; ++i) {
+            const auto& node = nodes_[paths[worst_path_id][i]];
             if (i != 0 && (node->in_degree() > 1 || node->out_degree() > 1)) {
                 has_external_edges = true;
                 break;
             }
             for (const auto& edge: node->suffix_edges) {
-                if (edge->end_node->id == paths[max_path_id][i+1]) {
+                if (edge->end_node->id == paths[worst_path_id][i+1]) {
                     edge->mark = true;
                     edge->pair->mark = true;
                     break;
@@ -648,6 +809,8 @@ void Graph::remove_bubbles() {
 
         remove_marked_edges();
     }
+
+    fprintf(stderr, "Bubbles popped %d\n", bubble_id);
 
     remove_isolated_nodes();
 }
@@ -703,14 +866,14 @@ void Graph::print_contigs() const {
 
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
-        if (node->id != 152) continue;
+        if (node->id != 178) continue;
         fprintf(stderr, "Start: %d", node->id);
 
         std::string contig = "";
         auto curr_node = node.get();
         while (curr_node->out_degree() != 0) {
             for (const auto& edge: curr_node->suffix_edges) {
-                if (edge->end_node->id != 183 && edge->end_node->id != 37) {
+                if (edge->end_node->id != 1026 && edge->end_node->id != 502 && edge->end_node->id != 1302) {
                     contig += edge->label();
                     curr_node = edge->end_node;
                     break;
@@ -759,7 +922,7 @@ void Graph::print() const {
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
 
-        printf("    %d [label = \"%u [%u] U:%d\"", node->id, node->id, node->length(), node->unitig_size());
+        printf("    %d [label = \"%u [%u] {%d} U:%d C:%g\"", node->id, node->id, node->length(), node->read_id, node->unitig_size(), node->coverage());
         if (node->id % 2 == 1) {
             printf(", style = filled, fillcolor = brown1]\n");
             printf("    %d -> %d [style = dotted, arrowhead = none]\n", node->id, node->id - 1);

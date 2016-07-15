@@ -24,10 +24,17 @@ std::unique_ptr<Read> createRead(uint32_t id, const char* name, uint32_t name_le
 Read::Read(uint32_t id, const char* name, uint32_t name_length, const char* sequence,
     uint32_t sequence_length, const char* quality, uint32_t quality_length) :
         id_(id), name_(name, name_length), sequence_(sequence, sequence_length),
-        quality_(quality, quality_length), rc_() {
+        quality_(quality, quality_length), rc_(), coverage_() {
+}
+
+void Read::trim_sequence(uint32_t begin, uint32_t end) {
+    sequence_ = sequence_.substr(begin, end - begin);
+    quality_ = quality_.substr(begin, end - begin);
 }
 
 void Read::create_rc() {
+
+    rc_.clear();
 
     for (int32_t i = sequence_.size() - 1; i >= 0; --i) {
         char c = sequence_[i];

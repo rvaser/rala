@@ -21,6 +21,11 @@ int main(int argc, char** argv) {
     auto qreader = BIOPARSER::createFastqReader<Read>(argv[2]);
     qreader->read_objects(reads, 1000000000);
 
+    //trimReads(reads, overlaps);
+    //return 0;
+
+    calculateReadCoverages(reads, overlaps);
+
     auto graph = createGraph(reads, overlaps);
     for (auto& it: reads) {
         it.reset();
@@ -32,23 +37,15 @@ int main(int argc, char** argv) {
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
     //graph->remove_cycles();
-    graph->remove_bubbles();
-    fprintf(stderr, "ROUND 2\n");
-    graph->remove_bubbles();
-    fprintf(stderr, "ROUND 3\n");
-    graph->remove_bubbles();
-    fprintf(stderr, "ROUND 4\n");
-    graph->remove_bubbles();
-    fprintf(stderr, "ROUND 5\n");
-    graph->remove_bubbles();
-    graph->remove_tips();
-    //graph->remove_long_edges();
     graph->create_unitigs();
     graph->remove_tips();
-    graph->create_unitigs();
-    graph->remove_tips();
-    graph->create_unitigs();
+    uint32_t r = 0;
+    while (r < 5) {
+        graph->remove_bubbles();
+        ++r;
+    }
     //graph->print_contigs();
+
     graph->print();
 
     return 0;
