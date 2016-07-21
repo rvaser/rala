@@ -8,7 +8,7 @@
 #include <list>
 #include <stack>
 #include <deque>
-#include <math.h>
+#include <algorithm>
 
 #include "read.hpp"
 #include "overlap.hpp"
@@ -21,10 +21,10 @@ constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.05;
 constexpr uint32_t kMinCoverage = 3;
 constexpr uint32_t kMaxOverhang = 1000;
-constexpr double kMaxOverhangToOverlapRatio = 0.8;
+constexpr double kMaxOverhangToOverlapRatio = 0.5;
 constexpr double kTransitiveEdgeEps = 0.12;
 constexpr double kShortLongOverlapRatio = 0.2;
-constexpr uint32_t kMaxBubbleLength = 250000;
+constexpr uint32_t kMaxBubbleLength = 50000;
 constexpr double kBubbleCoverageEps = 0.05;
 constexpr uint32_t kMinUnitigSize = 5;
 
@@ -32,123 +32,107 @@ static bool isSimilar(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps));
 };
 
-void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,
-    const std::vector<std::shared_ptr<Overlap>>& overlaps) {
-
-    std::vector<uint32_t> coverage(reads.size(), 0);
-    for (const auto& overlap: overlaps) {
-
-        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
-            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
-            overlap->matching_bases() < kMinMatchingBases ||
-            overlap->quality() < kMinMatchingBasesPerc) {
-            continue;
-        }
-
-        uint32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin());
-        uint32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end());
-        coverage[overlap->a_id()] += end - begin;
-
-        begin = overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin();
-        end = overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end();
-        coverage[overlap->b_id()] += end - begin;
-    }
-
-    for (uint32_t i = 0; i < coverage.size(); ++i) {
-        reads[i]->set_coverage(coverage[i] / (double) reads[i]->sequence().size());
-    }
-}
-
 void trimReads(std::vector<std::shared_ptr<Read>>& reads,
-    std::vector<std::shared_ptr<Overlap>>& overlaps) {
+    std::vector<std::shared_ptr<Overlap>>& overlaps,
+    uint32_t clip_size) {
 
-    std::vector<std::vector<uint32_t>> coverage(reads.size());
-    uint32_t tot = 0, rtot = 0;
-    for (const auto& overlap: overlaps) {
-
-        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
-            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
-            overlap->matching_bases() < kMinMatchingBases) {
-            continue;
-        }
-        ++tot;
+    std::vector<std::vector<int32_t>> hits(reads.size());
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
         if (overlap->quality() < kMinMatchingBasesPerc) {
             continue;
         }
 
-        if (coverage[overlap->a_id()].size() == 0) {
-            coverage[overlap->a_id()].resize(overlap->a_length(), 0);
-        }
-        uint32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin());
-        uint32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end());
+        int32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin()) + clip_size;
+        int32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end()) - clip_size;
+        hits[overlap->a_id()].push_back(begin << 1 | 0);
+        hits[overlap->a_id()].push_back(end << 1 | 1);
 
-        for (uint32_t i = begin; i < end; ++i) {
-            ++coverage[overlap->a_id()][i];
-        }
-
-        if (coverage[overlap->b_id()].size() == 0) {
-            coverage[overlap->b_id()].resize(overlap->b_length(), 0);
-        }
-        begin = overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin();
-        end = overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end();
-
-        for (uint32_t i = begin; i < end; ++i) {
-            ++coverage[overlap->b_id()][i];
-        }
-    }
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Totaly: %u\n", tot);
-
-    fprintf(stderr, "Regions done\n");
-
-    for (uint32_t c = 0; c < coverage.size(); ++c) {
-        const auto& cov = coverage[c];
-        if (!cov.empty()) {
-            // find longest region with coverage at least kMinCoverage
-            std::vector<uint32_t> regions;
-            for (uint32_t i = 0; i < cov.size(); ++i) {
-                if (cov[i] >= kMinCoverage) {
-                    regions.push_back(i);
-                    for (uint32_t j = i + 1; j < cov.size(); ++j, ++i) {
-                        if (cov[j] < kMinCoverage) {
-                            regions.push_back(j);
-                            break;
-                        }
-                    }
-                }
-            }
-            if (regions.size() % 2 != 0) {
-                regions.push_back(cov.size());
-            }
-
-            if (!regions.empty()) {
-                fprintf(stderr, "%d:", c + 1);
-                for (const auto& it: regions) {
-                    fprintf(stderr, " %u", it);
-                }
-                fprintf(stderr, "\n");
-                ++rtot;
-                //fprintf(stderr, "%s: %zu ->", reads[c]->name().c_str(), reads[c]->sequence().size());
-                reads[c]->trim_sequence(regions.front(), regions.back());
-                //fprintf(stderr, "%zu\n", reads[c]->sequence().size());
-            }
-        }
-
-        printf("@%s\n%s\n+\n%s\n",
-            reads[c]->name().c_str(),
-            reads[c]->sequence().c_str(),
-            reads[c]->quality().c_str());
+        begin = (overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin()) + clip_size;
+        end = (overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end()) - clip_size;
+        hits[overlap->b_id()].push_back(begin << 1 | 0);
+        hits[overlap->b_id()].push_back(end << 1 | 1);
     }
 
-    fprintf(stderr, "Totaly r: %u\n", rtot);
+    uint32_t rtot = 0;
+    std::vector<std::vector<uint32_t>> regions(reads.size());
+    for (uint32_t i = 0; i < hits.size(); ++i) {
+        if (hits[i].empty()) {
+            reads[i].reset();
+            continue;
+        }
+        std::sort(hits[i].begin(), hits[i].end());
+
+        int32_t coverage = 0, min_coverage = kMinCoverage;
+        int32_t begin = 0, max_begin = 0, max_end = 0;
+        for (const auto& hit: hits[i]) {
+            int32_t old_coverage = coverage;
+            if (hit & 1) {
+                --coverage;
+            } else {
+                ++coverage;
+            }
+            if (old_coverage < min_coverage && coverage >= min_coverage) {
+                if (hit & 1) fprintf(stderr, "SERIOUS SHIEEEET 0-1\n");
+                begin = hit >> 1;
+            } else if (old_coverage >= min_coverage && coverage < min_coverage) {
+                if (!(hit & 1)) fprintf(stderr, "SERIOUS SHIEEEET 1-0\n");
+                int32_t length = (hit >> 1) - begin;
+                if (length > max_end - max_begin) {
+                    max_begin = begin;
+                    max_end = hit >> 1;
+                }
+            }
+        }
+
+        if (max_end - max_begin > 0) {
+            ++rtot;
+            regions[i].push_back(max_begin - clip_size);
+            regions[i].push_back(max_end + clip_size);
+        } else {
+            reads[i].reset();
+        }
+    }
+
+    uint32_t otot = 0;
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        if (regions[overlap->a_id()].empty() || regions[overlap->b_id()].empty()) {
+            overlap.reset();
+            continue;
+        }
+
+        bool is_valid = overlap->update(regions[overlap->a_id()][0], regions[overlap->a_id()][1],
+            regions[overlap->b_id()][0], regions[overlap->b_id()][1]);
+        if (!is_valid || overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
+            overlap->b_end() - overlap->b_begin() < kMinOverlapLength) {
+            overlap.reset();
+        } else {
+            ++otot;
+        }
+    }
+
+    for (uint32_t i = 0; i < reads.size(); ++i) {
+        if (reads[i] == nullptr) continue;
+        reads[i]->trim_sequence(regions[i][0], regions[i][1]);
+    }
+
+    fprintf(stderr, "Total reads: %u\n", rtot);
+    fprintf(stderr, "Total overlaps: %u\n", otot);
 }
 
 uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
 
-    uint32_t overhang = std::min(overlap->a_begin(), overlap->b_begin()) +
-        std::min(overlap->a_length() - overlap->a_end(), overlap->b_length() - overlap->b_end());
+    uint32_t left_overhang = std::min(overlap->a_begin(), overlap->b_begin());
+    uint32_t right_overhang = std::min(overlap->a_length() - overlap->a_end(),
+        overlap->b_length() - overlap->b_end());
 
-    if (overhang > std::min(kMaxOverhang, (uint32_t) (kMaxOverhangToOverlapRatio * overlap->length()))) {
+    uint32_t a_len = overlap->a_end() - overlap->a_begin();
+    uint32_t b_len = overlap->b_end() - overlap->b_begin();
+
+    if (left_overhang > kMaxOverhang * 1.5 || right_overhang > kMaxOverhang * 1.5 ||
+        a_len < (a_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio ||
+        b_len < (b_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio) {
         return 0; // internal match
     }
     if (overlap->a_begin() <= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) <= (overlap->b_length() - overlap->b_end())) {
@@ -164,12 +148,142 @@ uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
     return 4; // b to a overlap
 }
 
+void removeChimericReads(std::vector<std::shared_ptr<Read>>& reads,
+    std::vector<std::shared_ptr<Overlap>>& overlaps) {
+
+    std::vector<std::vector<std::vector<uint32_t>>> chimeric(reads.size());
+
+    auto fill_chimeric = [&](uint32_t qid, uint32_t q_left_overhang, uint32_t q_right_overhang,
+        uint32_t t_left_overhang, uint32_t t_right_overhang) -> void {
+
+        if (q_left_overhang < kMaxOverhang && q_left_overhang < t_left_overhang) {
+            if (q_right_overhang > kMaxOverhang && t_right_overhang > kMaxOverhang) {
+                chimeric[qid][0].push_back(q_right_overhang << 1 | 1);
+            } else if (q_right_overhang > t_right_overhang && t_right_overhang < kMaxOverhang) {
+                chimeric[qid][0].push_back(q_right_overhang << 1 | 0);
+            }
+        } else if (q_right_overhang < kMaxOverhang && q_right_overhang < t_right_overhang) {
+            if (q_left_overhang > kMaxOverhang && t_left_overhang > kMaxOverhang) {
+                chimeric[qid][1].push_back(q_left_overhang << 1 | 1);
+            } else if (q_left_overhang > t_left_overhang && t_left_overhang < kMaxOverhang) {
+                chimeric[qid][1].push_back(q_left_overhang << 1 | 0);
+            }
+        }
+    };
+
+    for (const auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+
+        if (chimeric[overlap->a_id()].size() == 0) {
+            chimeric[overlap->a_id()].resize(2);
+        }
+        if (chimeric[overlap->b_id()].size() == 0) {
+            chimeric[overlap->b_id()].resize(2);
+        }
+
+        uint32_t a_left_overhang = overlap->a_begin();
+        uint32_t a_right_overhang = overlap->a_length() - overlap->a_end();
+        uint32_t b_left_overhang = overlap->b_begin();
+        uint32_t b_right_overhang = overlap->b_length() - overlap->b_end();
+
+        if (overlap->a_rc()) {
+            fill_chimeric(overlap->a_id(), a_right_overhang, a_left_overhang, b_right_overhang, b_left_overhang);
+        } else {
+            fill_chimeric(overlap->a_id(), a_left_overhang, a_right_overhang, b_left_overhang, b_right_overhang);
+        }
+
+        if (overlap->b_rc()) {
+            fill_chimeric(overlap->b_id(), b_right_overhang, b_left_overhang, a_right_overhang, a_left_overhang);
+        } else {
+            fill_chimeric(overlap->b_id(), b_left_overhang, b_right_overhang, a_left_overhang, a_right_overhang);
+        }
+    }
+
+    uint32_t ctot = 0;
+    for (uint32_t i = 0; i < chimeric.size(); ++i) {
+        if (chimeric[i].empty() || chimeric[i][0].size() < kMinCoverage ||
+            chimeric[i][1].size() < kMinCoverage) {
+            continue;
+        }
+
+        for (uint32_t j = 0; j < 2; ++j) {
+            std::sort(chimeric[i][j].begin(), chimeric[i][j].end());
+            int32_t counter[2] = {0, 0};
+            int32_t max = 0;
+            for (const auto& it: chimeric[i][j]) {
+                ++counter[it & 1];
+                max = max > counter[1] - counter[0] ? max : counter[1] - counter[0];
+            }
+            if (max >= (int32_t) kMinCoverage) {
+                reads[i].reset();
+                ctot++;
+                break;
+            }
+        }
+    }
+
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        if (reads[overlap->a_id()] == nullptr || reads[overlap->b_id()] == nullptr) {
+            overlap.reset();
+        }
+    }
+
+    fprintf(stderr, "Total chimeric = %u\n", ctot);
+}
+
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads,
+    std::vector<std::shared_ptr<Overlap>>& overlaps) {
+
+    uint32_t otot = 0;
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
+            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
+            overlap->matching_bases() < kMinMatchingBases) {
+            overlap.reset();
+        } else {
+            ++otot;
+        }
+    }
+    fprintf(stderr, "Starting hits = %u\n", otot);
+
+    trimReads(reads, overlaps, 0);
+
+    uint32_t ftot = 0;
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        overlap->set_type(classifyOverlap(overlap));
+        if (overlap->type() == 0) {
+            overlap.reset();
+        } else {
+            ++ftot;
+        }
+    }
+    fprintf(stderr, "Hits after fitlering = %u\n", ftot);
+
+    trimReads(reads, overlaps, kMinOverlapLength / 2);
+    removeChimericReads(reads, overlaps);
+
+    ftot = 0;
+    for (auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        overlap->set_type(classifyOverlap(overlap));
+        if (overlap->type() == 0) {
+            overlap.reset();
+        } else {
+            ++ftot;
+        }
+    }
+    fprintf(stderr, "Hits after fitlering = %u\n", ftot);
+}
+
 class Graph::Node {
 public:
     // Node encapsulating read
     Node(uint32_t _id, const std::shared_ptr<Read>& read) :
             id(_id), read_id(read->id()), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
-            prefix_edges(), suffix_edges(), scores(1, read->coverage()), mark(false) {
+            prefix_edges(), suffix_edges(), unitig_size(1), mark(false) {
     }
     // Unitig
     Node(uint32_t _id, Node* begin_node, Node* end_node);
@@ -190,22 +304,12 @@ public:
         return suffix_edges.size();
     }
 
-    uint32_t unitig_size() const {
-        return scores.size();
-    }
-
-    double coverage() const {
-        double cov = 0.0;
-        for (const auto& it: scores) cov += it;
-        return cov / scores.size();
-    }
-
     bool is_junction() const {
         return (out_degree() > 1 || in_degree() > 1);
     }
 
     bool is_tip() const {
-        return (out_degree() == 0 || in_degree() == 0) && unitig_size() < kMinUnitigSize;
+        return (out_degree() > 0 && in_degree() == 0) && unitig_size < kMinUnitigSize;
     }
 
     uint32_t id;
@@ -214,7 +318,7 @@ public:
     std::string sequence;
     std::list<Edge*> prefix_edges;
     std::list<Edge*> suffix_edges;
-    std::vector<double> scores;
+    uint32_t unitig_size;
     bool mark;
 };
 
@@ -257,7 +361,7 @@ public:
 };
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
-        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(), scores(), mark(false) {
+        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(), unitig_size(), mark(false) {
 
     if (!begin_node->prefix_edges.empty()) {
         begin_node->prefix_edges.front()->end_node = this;
@@ -270,7 +374,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
         auto* edge = curr_node->suffix_edges.front();
         edge->mark = true;
 
-        scores.insert(scores.begin(), curr_node->scores.begin(), curr_node->scores.end());
+        unitig_size += curr_node->unitig_size;
         length += edge->length;
         sequence += edge->label();
 
@@ -281,7 +385,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
         curr_node = edge->end_node;
     }
 
-    scores.insert(scores.begin(), end_node->scores.begin(), end_node->scores.end());
+    unitig_size += end_node->unitig_size;
     sequence += end_node->sequence;
 
     if (!end_node->suffix_edges.empty()) {
@@ -305,29 +409,28 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
         nodes_(), edges_() {
 
     // remove contained reads and their overlaps before graph construction
-    uint32_t max_read_id = 0;
-    for (const auto& read: reads) {
-        max_read_id = std::max(max_read_id, read->id());
+    std::vector<bool> is_valid(reads.size(), true);
+    for (uint32_t i = 0; i < reads.size(); ++i) {
+        if (reads[i] == nullptr) {
+            is_valid[i] = false;
+        }
     }
 
-    std::vector<bool> is_contained(max_read_id + 1, false);
-    std::vector<uint8_t> overlap_type(overlaps.size(), 0);
-
-    for (uint32_t i = 0; i < overlaps.size(); ++i) {
-        overlap_type[i] = classifyOverlap(overlaps[i]);
-
-        if (overlap_type[i] == 1) { // a contained
-            is_contained[overlaps[i]->a_id()] = true;
-        } else if (overlap_type[i] == 2) { // b contained
-            is_contained[overlaps[i]->b_id()] = true;
+    for (const auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        if (overlap->type() == 1) { // a contained
+            is_valid[overlap->a_id()] = false;
+        } else if (overlap->type() == 2) { // b contained
+            is_valid[overlap->b_id()] = false;
         }
     }
 
     // create assembly graph
-    std::vector<int32_t> read_id_to_node_id(max_read_id + 1, -1);
+    std::vector<int32_t> read_id_to_node_id(reads.size(), -1);
     uint32_t node_id = 0;
     for (const auto& read: reads) {
-        if (!is_contained[read->id()]) {
+        if (read == nullptr) continue;
+        if (is_valid[read->id()]) {
             read_id_to_node_id[read->id()] = node_id;
 
             Node* node = new Node(node_id++, read); // normal read
@@ -342,16 +445,10 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
     }
 
     uint32_t edge_id = 0;
-    for (uint32_t i = 0; i < overlaps.size(); ++i) {
-        const auto& overlap = overlaps[i];
-        if (!is_contained[overlap->a_id()] && !is_contained[overlap->b_id()]) {
-            if (overlap_type[i] < 3) {
-                continue;
-            }
-
-            if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
-                overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
-                overlap->matching_bases() < kMinMatchingBases) {
+    for (const auto& overlap: overlaps) {
+        if (overlap == nullptr) continue;
+        if (is_valid[overlap->a_id()] && is_valid[overlap->b_id()]) {
+            if (overlap->type() < 3) {
                 continue;
             }
 
@@ -361,7 +458,7 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
             auto b = nodes_[read_id_to_node_id[overlap->b_id()] + (overlap->b_rc() == 0 ? 0 : 1)].get();
             auto _b = b->pair;
 
-            if (overlap_type[i] == 3) { // a to b overlap
+            if (overlap->type() == 3) { // a to b overlap
                 Edge* edge = new Edge(edge_id++, overlap, a, b, 0);
                 Edge* _edge = new Edge(edge_id++, overlap, _b, _a, 1);
 
@@ -376,7 +473,7 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
                 b->prefix_edges.push_back(edge);
                 _b->suffix_edges.push_back(_edge);
 
-            } else if (overlap_type[i] == 4) { // b to a overlap
+            } else if (overlap->type() == 4) { // b to a overlap
                 Edge* edge = new Edge(edge_id++, overlap, b, a, 1);
                 Edge* _edge = new Edge(edge_id++, overlap, _a, _b, 0);
 
@@ -393,6 +490,7 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
             }
         }
     }
+
     fprintf(stderr, "NODES = %zu, HITS = %zu\n", nodes_.size(), edges_.size());
 }
 
@@ -405,7 +503,7 @@ void Graph::remove_isolated_nodes() {
         if (node == nullptr) {
             continue;
         }
-        if ((node->in_degree() == 0 && node->out_degree() == 0 && node->unitig_size() < kMinUnitigSize) || (node->mark == true)) {
+        if ((node->in_degree() == 0 && node->out_degree() == 0 && node->unitig_size < kMinUnitigSize) || (node->mark == true)) {
             // fprintf(stderr, "Removing isolated node: %d\n", node->id);
             node.reset();
         }
@@ -414,6 +512,7 @@ void Graph::remove_isolated_nodes() {
 
 void Graph::remove_transitive_edges() {
 
+    uint32_t ttot = 0;
     std::vector<Edge*> candidate_edge(nodes_.size(), nullptr);
 
     for (const auto& node_x: nodes_) {
@@ -430,6 +529,7 @@ void Graph::remove_transitive_edges() {
                     if (isSimilar(edge_xy->length + edge_yz->length, candidate_edge[z]->length, kTransitiveEdgeEps)) {
                         candidate_edge[z]->mark = true;
                         candidate_edge[z]->pair->mark = true;
+                        ttot += 2;
                     }
                 }
             }
@@ -440,7 +540,15 @@ void Graph::remove_transitive_edges() {
         }
     }
 
+    fprintf(stderr, "Removed %u transitive edges\n", ttot);
     remove_marked_edges();
+
+    ttot = 0;
+    for (const auto& it: edges_) {
+        if (it == nullptr) continue;
+        ++ttot;
+    }
+    fprintf(stderr, "%u remaining edges\n", ttot);
 }
 
 void Graph::remove_long_edges() {
@@ -453,7 +561,6 @@ void Graph::remove_long_edges() {
                 if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true) continue;
                 if (edge1->quality() > edge2->quality()) {
                     if (edge2->quality() / (double) edge1->quality() < kShortLongOverlapRatio) {
-                        fprintf(stderr, "Removing :OOOO\n");
                         edge2->mark = true;
                         edge2->pair->mark = true;
                     }
@@ -467,8 +574,10 @@ void Graph::remove_long_edges() {
 
 void Graph::remove_tips() {
 
+    uint32_t erased = 0;
     for (const auto& node: nodes_) {
         if (node == nullptr || !node->is_tip()) continue;
+        ++erased;
 
         bool is_tip = true;
         // bool is_only_tip = true;
@@ -528,6 +637,8 @@ void Graph::remove_tips() {
 
         remove_marked_edges();
     }
+
+    fprintf(stderr, "Erased %u tips\n", erased);
 
     remove_isolated_nodes();
 }
@@ -699,7 +810,6 @@ void Graph::remove_bubbles() {
             }
         }
 
-        // fprintf(stderr, "Bubble (search from %d): %d -> %d\n", node->id, begin_id, end_id);
         if (begin_id == (uint32_t) end_id) {
             continue;
         }
@@ -740,47 +850,32 @@ void Graph::remove_bubbles() {
             }
         }
 
-        /*for (const auto& path: paths) {
-            for (const auto& v: path) {
-                fprintf(stderr, "%u ", v);
-            }
-            fprintf(stderr, "\n");
-        }*/
-
         // remove the worst path
-        double worst_path_coverage = 1000000.0;
-        uint32_t worst_path_quality = 0;
+        uint32_t worst_path_num_reads = 100000;
+        uint32_t worst_path_first_edge_quality = 0;
         uint32_t worst_path_id = 0;
 
         for (uint32_t p = 0; p < paths.size(); ++p) {
-            double coverage = 0;
+            uint32_t num_reads = 0;
+            for (uint32_t i = 1; i < paths[p].size() - 1; ++i) {
+                num_reads += nodes_[paths[p][i]]->unitig_size;
+            }
             uint32_t quality = 0;
-            for (uint32_t i = 0; i < paths[p].size() - 1; ++i) {
-                if (i == 0) {
-                    for (const auto& edge: node->suffix_edges) {
-                        if (edge->end_node->id == paths[p][i+1]) {
-                            quality = edge->quality();
-                            break;
-                        }
-                    }
-                } else {
-                    coverage += nodes_[paths[p][i]]->coverage();
+            for (const auto& edge: node->suffix_edges) {
+                if (edge->end_node->id == paths[p][1]) {
+                    quality = edge->length;
+                    break;
                 }
             }
 
-            if (paths[p].size() > 2) {
-                coverage /= paths[p].size() - 2;
-            }
-
-            if (isSimilar(worst_path_coverage, coverage, kBubbleCoverageEps)) {
-                if (worst_path_quality > quality) {
-                    worst_path_coverage = coverage;
-                    worst_path_quality = quality;
+            if (worst_path_num_reads == num_reads) {
+                if (worst_path_first_edge_quality > quality) {
+                    worst_path_first_edge_quality = quality;
                     worst_path_id = p;
                 }
-            } else if (worst_path_coverage > coverage) {
-                worst_path_coverage = coverage;
-                worst_path_quality = quality;
+            } else if (worst_path_num_reads > num_reads) {
+                worst_path_num_reads = num_reads;
+                worst_path_first_edge_quality = quality;
                 worst_path_id = p;
             }
         }
@@ -819,6 +914,8 @@ void Graph::create_unitigs() {
 
     uint32_t node_id = nodes_.size();
     std::vector<bool> visited(nodes_.size(), false);
+    std::vector<std::unique_ptr<Node>> new_nodes;
+
     for (const auto& node: nodes_) {
         if (node == nullptr || visited[node->id] || node->is_junction()) continue;
 
@@ -852,10 +949,14 @@ void Graph::create_unitigs() {
         unitig->pair = _unitig;
         _unitig->pair = unitig;
 
-        nodes_.push_back(std::unique_ptr<Node>(unitig));
-        nodes_.push_back(std::unique_ptr<Node>(_unitig));
+        new_nodes.push_back(std::unique_ptr<Node>(unitig));
+        new_nodes.push_back(std::unique_ptr<Node>(_unitig));
 
         fprintf(stderr, "Unitig: %d -> %d && %d -> %d\n", bnode->id, enode->id, enode->pair->id, bnode->pair->id);
+    }
+
+    for (auto& node: new_nodes) {
+        nodes_.push_back(std::move(node));
     }
 
     remove_marked_edges();
@@ -866,17 +967,21 @@ void Graph::print_contigs() const {
 
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
-        if (node->id != 178) continue;
+        if (node->id != 3265) continue;
         fprintf(stderr, "Start: %d", node->id);
 
         std::string contig = "";
+        uint32_t tempo = 66;
         auto curr_node = node.get();
         while (curr_node->out_degree() != 0) {
             for (const auto& edge: curr_node->suffix_edges) {
-                if (edge->end_node->id != 1026 && edge->end_node->id != 502 && edge->end_node->id != 1302) {
+                if (edge->end_node->id != 544 && edge->end_node->id != 4951 && edge->end_node->id != 545 && edge->end_node->id != tempo) {
                     contig += edge->label();
                     curr_node = edge->end_node;
                     break;
+                }
+                if (edge->end_node->id == tempo) {
+                    ++tempo;
                 }
             }
             fprintf(stderr, " %d", curr_node->id);
@@ -922,7 +1027,7 @@ void Graph::print() const {
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
 
-        printf("    %d [label = \"%u [%u] {%d} U:%d C:%g\"", node->id, node->id, node->length(), node->read_id, node->unitig_size(), node->coverage());
+        printf("    %d [label = \"%u [%u] {%d} U:%d\"", node->id, node->id, node->length(), node->read_id, node->unitig_size);
         if (node->id % 2 == 1) {
             printf(", style = filled, fillcolor = brown1]\n");
             printf("    %d -> %d [style = dotted, arrowhead = none]\n", node->id, node->id - 1);

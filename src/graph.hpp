@@ -14,10 +14,11 @@ namespace RALAY {
 class Read;
 class Overlap;
 /*
- * @brief Trims reads from both sides based on read to read overlaps
+ * @brief Trims reads from both sides based on read to read overlaps (taken from Miniasm);
+ * Removes chimeric reads (taken from Miniasm)
  * (Li 2016)
  */
-void trimReads(std::vector<std::shared_ptr<Read>>& reads,
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads,
     std::vector<std::shared_ptr<Overlap>>& overlaps);
 
 void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,

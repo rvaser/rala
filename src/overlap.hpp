@@ -80,6 +80,17 @@ public:
         return matching_bases_;
     }
 
+    uint32_t type() const {
+        return type_;
+    }
+
+    void set_type(uint32_t type) {
+        type_ = type;
+    }
+
+    bool update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
+        uint32_t b_trimmed_begin, uint32_t b_trimmed_end);
+
     friend std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
         double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
         uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
@@ -111,6 +122,7 @@ private:
     double quality_;
     uint32_t length_;
     uint32_t matching_bases_;
+    uint32_t type_;
 };
 
 }

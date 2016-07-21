@@ -21,29 +21,29 @@ int main(int argc, char** argv) {
     auto qreader = BIOPARSER::createFastqReader<Read>(argv[2]);
     qreader->read_objects(reads, 1000000000);
 
-    //trimReads(reads, overlaps);
-    //return 0;
-
-    calculateReadCoverages(reads, overlaps);
+    preprocessData(reads, overlaps);
 
     auto graph = createGraph(reads, overlaps);
-    for (auto& it: reads) {
-        it.reset();
+    for (auto& read: reads) {
+        if (read != nullptr) read.reset();
     }
-    for (auto& it: overlaps) {
-        it.reset();
+    for (auto& overlap: overlaps) {
+        if (overlap != nullptr) overlap.reset();
     }
 
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
-    //graph->remove_cycles();
     graph->create_unitigs();
     graph->remove_tips();
     uint32_t r = 0;
     while (r < 5) {
         graph->remove_bubbles();
+        graph->remove_tips();
+        graph->create_unitigs();
         ++r;
     }
+    graph->remove_long_edges();
+    graph->create_unitigs();
     //graph->print_contigs();
 
     graph->print();
