@@ -14,7 +14,7 @@
 #include "overlap.hpp"
 #include "graph.hpp"
 
-namespace RALAY {
+namespace RALA {
 
 constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;

@@ -12,7 +12,7 @@
 
 #include "bioparser/src/bioparser.hpp"
 
-namespace RALAY {
+namespace RALA {
 
 class Read;
 std::unique_ptr<Read> createRead(uint32_t id, const char* name, uint32_t name_length,

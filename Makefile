@@ -2,7 +2,7 @@ CP = g++
 LD = g++
 DX = doxygen
 
-NAME = ralay
+NAME = rala
 
 OBJ_DIR = obj
 SRC_DIR = src

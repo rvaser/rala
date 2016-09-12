@@ -9,7 +9,7 @@
 #include <memory>
 #include <vector>
 
-namespace RALAY {
+namespace RALA {
 
 class Read;
 class Overlap;

@@ -9,7 +9,7 @@
 #include "read.hpp"
 #include "bioparser/src/bioparser.hpp"
 
-using namespace RALAY;
+using namespace RALA;
 
 int main(int argc, char** argv) {
 

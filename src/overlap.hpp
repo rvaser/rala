@@ -11,7 +11,7 @@
 
 #include "bioparser/src/bioparser.hpp"
 
-namespace RALAY {
+namespace RALA {
 
 class Overlap;
 std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
