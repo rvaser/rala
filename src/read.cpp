@@ -35,7 +35,6 @@ void Read::trim_sequence(uint32_t begin, uint32_t end) {
 void Read::create_rc() {
 
     rc_.clear();
-
     for (int32_t i = sequence_.size() - 1; i >= 0; --i) {
         char c = sequence_[i];
         switch (c) {

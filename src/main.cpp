@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <unordered_set>
+#include <algorithm>
 
 #include "overlap.hpp"
 #include "graph.hpp"
@@ -14,12 +15,12 @@ using namespace RALA;
 int main(int argc, char** argv) {
 
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    auto reader = BIOPARSER::createMhapReader<Overlap>(argv[1]);
-    reader->read_objects(overlaps, 1000000000);
+    auto oreader = BIOPARSER::createMhapReader<Overlap>(argv[1]);
+    oreader->read_objects(overlaps, 1000000000);
 
     std::vector<std::shared_ptr<Read>> reads;
-    auto qreader = BIOPARSER::createFastqReader<Read>(argv[2]);
-    qreader->read_objects(reads, 1000000000);
+    auto rreader = BIOPARSER::createFastqReader<Read>(argv[2]);
+    rreader->read_objects(reads, 1000000000);
 
     preprocessData(reads, overlaps);
 
@@ -34,19 +35,24 @@ int main(int argc, char** argv) {
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
     graph->create_unitigs();
-    graph->remove_tips();
+    //graph->remove_long_edges();
     uint32_t r = 0;
-    while (r < 5) {
-        graph->remove_bubbles();
+    while (r < 10) {
+        //graph->create_unitigs();
         graph->remove_tips();
-        graph->create_unitigs();
+        graph->remove_bubbles();
         ++r;
     }
+    //graph->create_unitigs();
+    graph->remove_tips();
     graph->remove_long_edges();
-    graph->create_unitigs();
+    //graph->create_unitigs();
+    //graph->remove_tips();
+    //graph->create_unitigs();
     //graph->print_contigs();
 
-    graph->print();
+    //graph->print_dot();
+    graph->print_csv();
 
     return 0;
 }

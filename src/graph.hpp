@@ -72,7 +72,12 @@ public:
     /*
      * @brief Prints graph in graphviz format
      */
-    void print() const;
+    void print_dot() const;
+
+    /*
+     * @brief Prints graph in csv format
+     */
+    void print_csv() const;
 
     friend std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
         const std::vector<std::shared_ptr<Overlap>>& overlaps);
@@ -85,6 +90,9 @@ private:
     const Graph& operator=(const Graph&) = delete;
 
     void remove_marked_edges();
+
+    void locate_bubble_sources(std::vector<uint32_t>& dst);
+    void remove_bubble_debris();
 
     class Node;
     class Edge;
