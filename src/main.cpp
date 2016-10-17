@@ -15,11 +15,11 @@ using namespace RALA;
 int main(int argc, char** argv) {
 
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    auto oreader = BIOPARSER::createMhapReader<Overlap>(argv[1]);
+    auto oreader = BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(argv[1]);
     oreader->read_objects(overlaps, 1000000000);
 
     std::vector<std::shared_ptr<Read>> reads;
-    auto rreader = BIOPARSER::createFastqReader<Read>(argv[2]);
+    auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(argv[2]);
     rreader->read_objects(reads, 1000000000);
 
     preprocessData(reads, overlaps);
@@ -43,9 +43,6 @@ int main(int argc, char** argv) {
         graph->remove_bubbles();
         ++r;
     }
-    //graph->create_unitigs();
-    graph->remove_tips();
-    graph->remove_long_edges();
     //graph->create_unitigs();
     //graph->remove_tips();
     //graph->create_unitigs();
