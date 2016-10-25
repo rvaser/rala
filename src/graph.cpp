@@ -10,8 +10,8 @@
 #include <deque>
 #include <algorithm>
 
-//#include <iostream>
-//#include <fstream>
+#include <iostream>
+#include <fstream>
 
 #include "read.hpp"
 #include "overlap.hpp"
@@ -23,28 +23,39 @@ constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.055;
 constexpr double kChimericRatio = 1.85;
-constexpr double kOverlapQualityRatio = 2.77;
-constexpr double kOverlapLengthRatio = 50.17;
+constexpr double kMinMatchingBasesRatio = 2.5;
+constexpr double kOverlapQualityRatio = 2.57;
+constexpr double kOverlapLengthRatio = 5.17;
 constexpr uint32_t kMinCoverage = 3;
 constexpr uint32_t kMaxOverhang = 1000;
 constexpr double kMaxOverhangToOverlapRatio = 0.8;
 constexpr double kTransitiveEdgeEps = 0.12;
-constexpr uint32_t kMaxBubbleLength = 500000;
+constexpr uint32_t kMaxBubbleLength = 50000;
 constexpr uint32_t kMinUnitigSize = 5;
 
-static bool isSimilar(double a, double b, double eps) {
-    return (a >= b * (1 - eps) && a <= b * (1 + eps));
-};
-
 uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap);
+
+static bool isSimilar(double a, double b, double eps) {
+    return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
+        (b >= a * (1 - eps) && b <= a * (1 + eps));
+};
 
 void trimReads(std::vector<std::shared_ptr<Read>>& reads,
     std::vector<std::shared_ptr<Overlap>>& overlaps,
     uint32_t clip_size) {
 
     std::vector<std::vector<int32_t>> hits(reads.size());
+    auto print_pileogram = [&](uint32_t i) {
+        std::ofstream out;
+        std::string name = "output/" + std::to_string(i);
+        out.open(name);
+        for (int32_t j = 0; j < (int32_t) hits[i].size(); j+= 2) {
+            out << (hits[i][j] >> 1) << " " << (hits[i][j+1] >> 1) << std::endl;
+        }
+        out.close();
+    };
 
-    /*std::vector<std::vector<uint32_t>> histograms(reads.size());
+    std::vector<std::vector<uint32_t>> histograms(reads.size());
     for (uint32_t i = 0; i < reads.size(); ++i) {
         if (reads[i] == nullptr) continue;
         histograms[i].resize(reads[i]->sequence().size(), 0);
@@ -53,11 +64,12 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
         std::ofstream out;
         std::string name = "output/" + extension + std::to_string(i);
         out.open(name);
-        for (uint32_t j = 0; j < histograms[i].size(); ++j) {
-            out << j << " " << histograms[i][j] << std::endl;
+        for (int32_t j = 0; j < (int32_t) histograms[i].size(); ++j) {
+            double derv = histograms[i][std::max(0,j+15)] == 0 || histograms[i][std::max(0,j-15)] == 0 ? 0 : log(histograms[i][std::max(0,j+15)] / (double) histograms[i][std::min((int32_t)histograms[i].size()-1,j-15)]);
+            out << j << " " << histograms[i][j] << " " << derv * derv << std::endl;
         }
         out.close();
-    };*/
+    };
 
     for (auto& overlap: overlaps) {
         if (overlap == nullptr) continue;
@@ -70,18 +82,10 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
         hits[overlap->a_id()].push_back(begin << 1 | 0);
         hits[overlap->a_id()].push_back(end << 1 | 1);
 
-        /*for (int32_t k = begin; k <= end; ++k) {
-            ++histograms[overlap->a_id()][k];
-        }*/
-
         begin = (overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin()) + clip_size;
         end = (overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end()) - clip_size;
         hits[overlap->b_id()].push_back(begin << 1 | 0);
         hits[overlap->b_id()].push_back(end << 1 | 1);
-
-        /*for (int32_t k = begin; k <= end; ++k) {
-            ++histograms[overlap->b_id()][k];
-        }*/
     }
 
     uint32_t rtot = 0;
@@ -95,7 +99,15 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
 
         int32_t coverage = 0, min_coverage = kMinCoverage;
         int32_t begin = 0, max_begin = 0, max_end = 0;
+        uint32_t last = 0;
         for (const auto& hit: hits[i]) {
+            if (coverage > 0) {
+                for (int32_t k = last; k < hit >> 1; ++k) {
+                    histograms[i][k] += coverage;
+                }
+                last = hit >> 1;
+            }
+
             int32_t old_coverage = coverage;
             if (hit & 1) {
                 --coverage;
@@ -128,10 +140,10 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
     for (uint32_t i = 0; i < reads.size(); ++i) {
         if (reads[i] == nullptr || regions[i].size() == 0) continue;
 
-        //int32_t begin = regions[i][0];
-        //int32_t length = regions[i][1] - regions[i][0];
-        int32_t begin = 0;
-        int32_t length = reads[i]->sequence().size();
+        int32_t begin = regions[i][0];
+        int32_t length = regions[i][1] - regions[i][0];
+        //int32_t begin = 0;
+        //int32_t length = reads[i]->sequence().size();
 
         int32_t left_border = begin + length / 4;
         int32_t right_border = begin + 3 * length / 4;
@@ -183,8 +195,8 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
         right_check_sum += coverage * (right_check - right_check_last);
 
         if (left_max / (double) middle_min > kChimericRatio && right_max / (double) middle_min > kChimericRatio) {
-            reads[i].reset();
             chim++;
+            reads[i].reset();
             //print_histogram(i, "c");
         } else if (left_max / (double) right_max > kChimericRatio && left_max / (left_check_sum / (double) (left_check - begin)) < kChimericRatio) {
             //fprintf(stderr, "%d (%d - %d) || %f [%d - %d - %d] %f\n", i, regions[i][0], regions[i][1], left_max / (left_check_sum / (double) (left_check - begin)), left_max, middle_min, right_max, (right_check_sum / (double) (left_check - begin)));
@@ -292,7 +304,7 @@ class Graph::Node {
         // Node encapsulating read
         Node(uint32_t _id, const std::shared_ptr<Read>& read) :
                 id(_id), read_id(read->id()), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
-                prefix_edges(), suffix_edges(), unitig_size(1), mark(false), is_bubble_debris(false) {
+                prefix_edges(), suffix_edges(), unitig_size(1), mark(false) {
         }
         // Unitig
         Node(uint32_t _id, Node* begin_node, Node* end_node);
@@ -329,7 +341,6 @@ class Graph::Node {
         std::list<Edge*> suffix_edges;
         uint32_t unitig_size;
         bool mark;
-        bool is_bubble_debris;
 };
 
 class Graph::Edge {
@@ -337,7 +348,7 @@ class Graph::Edge {
         Edge(uint32_t _id, const std::shared_ptr<Overlap>& overlap, Node* _begin_node,
             Node* _end_node, uint32_t type) :
                 id(_id), pair(), begin_node(_begin_node), end_node(_end_node), length(),
-                score(overlap->quality()), mark(false) {
+                quality(overlap->quality()), mark(false) {
 
             uint32_t length_a = id % 2 == 0 ? overlap->a_begin() : overlap->a_length() - overlap->a_end();
             uint32_t length_b = id % 2 == 0 ? overlap->b_begin() : overlap->b_length() - overlap->b_end();
@@ -357,8 +368,8 @@ class Graph::Edge {
             return begin_node->sequence.substr(0, length);
         }
 
-        uint32_t quality() const {
-            return (score * (begin_node->length() - length));
+        uint32_t matching_bases() const {
+            return (quality * (begin_node->length() - length));
         }
 
         uint32_t id;
@@ -366,13 +377,13 @@ class Graph::Edge {
         Node* begin_node;
         Node* end_node;
         uint32_t length;
-        double score;
+        double quality;
         bool mark;
 };
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
-        unitig_size(), mark(false), is_bubble_debris(false) {
+        unitig_size(), mark(false) {
 
     if (!begin_node->prefix_edges.empty()) {
         begin_node->prefix_edges.front()->end_node = this;
@@ -386,7 +397,6 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
         edge->mark = true;
 
         unitig_size += curr_node->unitig_size;
-        is_bubble_debris |= curr_node->is_bubble_debris;
         length += edge->length;
         sequence += edge->label();
 
@@ -398,7 +408,6 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
     }
 
     unitig_size += end_node->unitig_size;
-    is_bubble_debris |= end_node->is_bubble_debris;
     sequence += end_node->sequence;
 
     if (!end_node->suffix_edges.empty()) {
@@ -418,8 +427,8 @@ std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& rea
 }
 
 Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
-    const std::vector<std::shared_ptr<Overlap>>& overlaps) :
-        nodes_(), edges_() {
+    const std::vector<std::shared_ptr<Overlap>>& overlaps)
+        : nodes_(), edges_() {
 
     // remove contained reads and their overlaps before graph construction
     std::vector<bool> is_valid(reads.size(), true);
@@ -574,19 +583,11 @@ void Graph::remove_long_edges() {
         for (const auto& edge1: node->suffix_edges) {
             for (const auto& edge2: node->suffix_edges) {
                 if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true) continue;
-                if (edge1->score > kOverlapQualityRatio * edge2->score) { // || edge2->length > kOverlapLengthRatio * edge1->length) {
-                    fprintf(stderr, "%d -> %d\n", edge2->begin_node->id, edge2->end_node->id);
+                if (edge1->matching_bases() > kMinMatchingBasesRatio * edge2->matching_bases()) {
                     edge2->mark = true;
                     edge2->pair->mark = true;
                     ++total;
                 }
-                /*if (edge1->length < edge2->length) {
-                    if ((edge2->begin_node->length() - edge2->length) / (double) (edge1->begin_node->length() - edge1->length) < kShortLongOverlapRatio) {
-                        edge2->mark = true;
-                        edge2->pair->mark = true;
-                        ++total;
-                    }
-                }*/
             }
         }
     }
@@ -601,30 +602,20 @@ void Graph::remove_tips() {
     for (const auto& node: nodes_) {
         if (node == nullptr || !node->is_tip()) continue;
 
-        node->mark = true;
-        node->pair->mark = true;
+        uint32_t num_removed_edges = 0;
 
         for (const auto& edge: node->suffix_edges) {
-            bool remove_edge = true;
-            if (edge->end_node->in_degree() == 1) {
-                remove_edge = false;
-            } else {
-                for (const auto& oedge: edge->end_node->prefix_edges) {
-                    if (oedge->begin_node->id == node->id) continue;
-                    if (oedge->begin_node->is_tip() && oedge->length < edge->length) {
-                        remove_edge = false;
-                        break;
-                    }
-                }
-            }
-
-            if (remove_edge) {
+            if (edge->end_node->in_degree() > 1) {
+                // fprintf(stderr, "Removing %d\n", edge->begin_node->id);
                 edge->mark = true;
                 edge->pair->mark = true;
-            } else {
-                node->mark = false;
-                node->pair->mark = false;
+                ++num_removed_edges;
             }
+        }
+
+        if (num_removed_edges == node->suffix_edges.size()) {
+            node->mark = true;
+            node->pair->mark = true;
         }
 
         remove_marked_edges();
@@ -698,8 +689,8 @@ void Graph::remove_cycles() {
                 const auto& node = nodes_[cycle[i]];
                 for (auto& edge: node->prefix_edges) {
                     if (edge->begin_node->id == cycle[i + 1]) {
-                        if (min_score > edge->score) {
-                            min_score = edge->score;
+                        if (min_score > edge->quality) {
+                            min_score = edge->quality;
                             worst_edge = edge;
                         }
                         break;
@@ -718,220 +709,171 @@ void Graph::remove_cycles() {
 
 void Graph::remove_bubbles() {
 
+    std::vector<uint32_t> distance(nodes_.size(), 0);
+    std::vector<uint32_t> visited(nodes_.size(), 0);
+    uint32_t visited_length = 0;
+    std::vector<int32_t> predecessor(nodes_.size(), -1);
+    std::deque<uint32_t> queue;
+
+    auto extract_path = [&](std::vector<uint32_t>& dst, int32_t source, int32_t sink) -> void {
+        int32_t curr_id = sink;
+        while (curr_id != source) {
+            dst.push_back(curr_id);
+            curr_id = predecessor[curr_id];
+        }
+        dst.push_back(source);
+        std::reverse(dst.begin(), dst.end());
+    };
+
+    auto is_valid_bubble = [](const std::vector<uint32_t>& path, const std::vector<uint32_t>& other_path) -> bool {
+        std::set<uint32_t> node_set;
+        for (uint32_t i = 1; i < path.size() - 1; ++i) node_set.insert(path[i]);
+        for (uint32_t i = 1; i < other_path.size() - 1; ++i) node_set.insert(other_path[i]);
+        if (node_set.count(path[0]) != 0 || node_set.count(path[path.size()-1]) != 0) {
+            return false;
+        }
+        if (path.size() + other_path.size() - 4 != node_set.size()) {
+            return false;
+        }
+        return true;
+    };
+
+    auto path_params = [&](const std::vector<uint32_t>& path, uint32_t& num_reads, uint32_t& matching_bases, double& quality) -> void {
+        num_reads = 0;
+        for (const auto& it: path) num_reads += nodes_[it]->unitig_size;
+        for (const auto& edge: nodes_[path[0]]->suffix_edges) {
+            if (edge->end_node->id == path[1]) {
+                quality = edge->quality;
+                matching_bases = edge->matching_bases();
+                break;
+            }
+        }
+        return;
+    };
+
+    auto remove_path = [&](const std::vector<uint32_t>& path) -> void {
+        for (uint32_t i = 0; i < path.size() - 1; ++i) {
+            const auto& node = nodes_[path[i]];
+            if (i != 0 && (node->in_degree() > 1 || node->out_degree() > 1)) {
+                // fprintf(stderr, "Breaking at %d\n", path[i]);
+                break;
+            }
+            for (const auto& edge: node->suffix_edges) {
+                if (edge->end_node->id == path[i + 1]) {
+                    edge->mark = true;
+                    edge->pair->mark = true;
+                    break;
+                }
+            }
+        }
+        return;
+    };
+
+    uint32_t bubbles_popped = 0;
+
     std::vector<uint32_t> bubble_candidates;
     locate_bubble_sources(bubble_candidates);
-
-    uint32_t bubble_id = 0;
     for (const auto& id: bubble_candidates) {
         const auto& node = nodes_[id];
 
-        while (node->out_degree() > 1) {
+    // for (const auto& node: nodes_) {
+        if (node == nullptr || node->out_degree() < 2) continue;
 
-            std::vector<uint32_t> distance(nodes_.size(), -1);
-            distance[node->id] = 0;
-            std::vector<bool> visited(nodes_.size(), false);
+        bool found_sink = false;
+        int32_t sink = 0, sink_other_predecesor = 0;
+        int32_t source = node->id;
 
-            std::deque<uint32_t> queue;
-            queue.push_back(node->id);
+        // BFS
+        queue.push_back(source);
+        visited[visited_length++] = source;
+        while (queue.size() != 0 && !found_sink) {
+            int32_t v = queue.front();
+            const auto& curr_node = nodes_[v];
 
-            int32_t end_id = -1;
+            queue.pop_front();
 
-            // BFS
-            while (queue.size() != 0) {
-                const auto& curr_node = nodes_[queue.front()];
-                queue.pop_front();
+            for (const auto& edge: curr_node->suffix_edges) {
+                int32_t w = edge->end_node->id;
 
-                uint32_t v = curr_node->id;
-                if (visited[v] == true) {
-                    // found end
-                    end_id = v;
-                    break;
-                }
-
-                visited[v] = true;
-                for (const auto& edge: curr_node->suffix_edges) {
-                    uint32_t w = edge->end_node->id;
-
-                    if (w == node->id) {
-                        // Cycle
-                        continue;
-                    }
-                    if (distance[v] + edge->length > kMaxBubbleLength) {
-                        // Out of reach
-                        continue;
-                    }
-
-                    distance[w] = distance[v] + edge->length;
-                    //if (nodes_[w]->out_degree() != 0) {
-                        queue.push_back(w);
-                    //}
-                }
-            }
-
-            if (end_id == -1) {
-                // no bubble found
-                break;
-            }
-
-            // backtrack from end node
-            queue.clear();
-            queue.push_back(end_id);
-            std::fill(visited.begin(), visited.end(), false);
-            uint32_t begin_id;
-
-            // BFS
-            while (queue.size() != 0) {
-                const auto& curr_node = nodes_[queue.front()];
-                queue.pop_front();
-
-                uint32_t v = curr_node->id;
-                if (visited[v] == true) {
-                    // found begin node;
-                    begin_id = v;
-                    break;
-                }
-
-                visited[v] = true;
-                for (const auto& edge: curr_node->prefix_edges) {
-                    uint32_t w = edge->begin_node->id;
-                    if (visited[w] == true) {
-                        queue.push_front(w);
-                        break;
-                    }
-                    queue.push_back(w);
-                }
-            }
-
-            if (begin_id != node->id || begin_id == (uint32_t) end_id) {
-                break;
-            }
-
-            // fprintf(stderr, "Bubble: %d - %d\n", begin_id, end_id);
-
-            ++bubble_id;
-
-            // find paths between begin & end nodes
-            std::vector<std::vector<uint32_t>> paths;
-            std::vector<uint32_t> path;
-            path.push_back(begin_id);
-            std::vector<bool> visited_edge(edges_.size(), false);
-
-            // DFS
-            while (path.size() != 0) {
-
-                const auto& curr_node = nodes_[path.back()];
-                uint32_t v = curr_node->id;
-
-                if (v == (uint32_t) end_id) {
-                    paths.push_back(path);
-                    path.pop_back();
+                if (w == source) {
+                    // Cycle
                     continue;
                 }
 
-                bool valid = false;
-
-                for (const auto& edge: curr_node->suffix_edges) {
-                    if (visited_edge[edge->id] == false) {
-                        path.push_back(edge->end_node->id);
-                        visited_edge[edge->id] = true;
-                        valid = true;
-                        break;
-                    }
+                if (distance[v] + edge->length > kMaxBubbleLength) {
+                    // Out of reach
+                    continue;
                 }
 
-                if (!valid) {
-                    path.pop_back();
-                }
-            }
+                distance[w] = distance[v] + edge->length;
+                visited[visited_length++] = w;
+                queue.push_back(w);
 
-            if (paths.size() < 2) {
-                break;
-            }
-
-            // remove the worst path
-            uint32_t worst_path_num_reads = 100000;
-            float worst_path_first_edge_quality = 1.0;
-            uint32_t worst_path_id = 0;
-
-            // fprintf(stderr, "Start = %d, Source = %d, paths num = %zu\n", node->id, begin_id, paths.size());
-
-            for (uint32_t p = 0; p < paths.size(); ++p) {
-                uint32_t num_reads = 0;
-                for (uint32_t i = 1; i < paths[p].size() - 1; ++i) {
-                    num_reads += nodes_[paths[p][i]]->unitig_size;
-                }
-                float quality = 0;
-                for (const auto& edge: node->suffix_edges) {
-                    if (edge->end_node->id == paths[p][1]) {
-                        quality = edge->score; //edge->length;
-                        break;
-                    }
-                }
-
-                // fprintf(stderr, "  path %d (#,len,1err) - %zu, %d, %f\n", p, paths[p].size(), num_reads, quality);
-
-                if (worst_path_num_reads == num_reads) {
-                    if (worst_path_first_edge_quality > quality) {
-                        worst_path_first_edge_quality = quality;
-                        worst_path_id = p;
-                    }
-                } else if (worst_path_num_reads > num_reads) {
-                    worst_path_num_reads = num_reads;
-                    worst_path_first_edge_quality = quality;
-                    worst_path_id = p;
-                }
-            }
-
-            /*fprintf(stderr, "Worst path %d: %zu, %d, %f\n", worst_path_id, paths[worst_path_id].size(), worst_path_num_reads, worst_path_first_edge_quality);
-            fprintf(stderr, "Worst path:");
-            for (const auto& it: paths[worst_path_id]) {
-                fprintf(stderr, " %d", it);
-            }
-            fprintf(stderr, "\n");*/
-
-            for (uint32_t i = 0; i < paths[worst_path_id].size() - 1; ++i) {
-                const auto& node = nodes_[paths[worst_path_id][i]];
-                if (i != 0 && (node->in_degree() > 1 || node->out_degree() > 1)) {
-                    // fprintf(stderr, "Breaking at %d\n", paths[worst_path_id][i]);
-                    node->is_bubble_debris = true;
+                if (predecessor[w] != -1) {
+                    sink = w;
+                    sink_other_predecesor = v;
+                    found_sink = true;
                     break;
                 }
-                for (const auto& edge: node->suffix_edges) {
-                    if (edge->end_node->id == paths[worst_path_id][i+1]) {
-                        edge->mark = true;
-                        edge->pair->mark = true;
-                        break;
-                    }
+
+                predecessor[w] = v;
+            }
+        }
+
+        if (found_sink) {
+            fprintf(stderr, "Source = %u, sink = %u, sink_predecesors = [%u, %u]\n", source, sink, predecessor[sink], sink_other_predecesor);
+
+            std::vector<uint32_t> path, other_path;
+            extract_path(path, source, sink);
+            other_path.push_back(sink);
+            extract_path(other_path, source, sink_other_predecesor);
+
+            fprintf(stderr, "Path 1:");
+            for (const auto& it: path) fprintf(stderr, " %d", it);
+            fprintf(stderr, "\n");
+
+            fprintf(stderr, "Path 2:");
+            for (const auto& it: other_path) fprintf(stderr, " %d", it);
+            fprintf(stderr, "\n");
+
+            if (!is_valid_bubble(path, other_path)) {
+                fprintf(stderr, "Not valid bubble!\n");
+            } else {
+                uint32_t path_reads = 0, path_matching_bases = 0;
+                double path_quality = 0;
+                path_params(path, path_reads, path_matching_bases, path_quality);
+
+                uint32_t other_path_reads = 0, other_path_matching_bases = 0;
+                double other_path_quality = 0;
+                path_params(other_path, other_path_reads, other_path_matching_bases,
+                    other_path_quality);
+
+                fprintf(stderr, "Path 1 = (%d, %d, %g) | Path 2 = (%d, %d, %g) | Worse path is ",
+                    path_reads, path_matching_bases, path_quality,
+                    other_path_reads, other_path_matching_bases, other_path_quality);
+
+                if (path_reads > other_path_reads || (path_reads == other_path_reads && path_matching_bases > other_path_matching_bases)) {
+                    fprintf(stderr, "2\n");
+                    remove_path(other_path);
+                } else {
+                    fprintf(stderr, "1\n");
+                    remove_path(path);
                 }
+                remove_marked_edges();
+                ++bubbles_popped;
             }
-
-            remove_marked_edges();
         }
+
+        queue.clear();
+        for (uint32_t i = 0; i < visited_length; ++i) {
+            distance[visited[i]] = 0;
+            predecessor[visited[i]] = -1;
+        }
+        visited_length = 0;
     }
 
-    fprintf(stderr, "Bubbles popped %d\n", bubble_id);
-
-    //create_unitigs();
-    //remove_bubble_debris();
-}
-
-void Graph::remove_bubble_debris() {
-
-    for (const auto& node: nodes_) {
-        if (node == nullptr || !node->is_bubble_debris) continue;
-
-        if (node->out_degree() > 0 && node->in_degree() == 0) {
-            for (auto& edge: node->suffix_edges) {
-                edge->mark = true;
-                edge->pair->mark = true;
-            }
-            node->mark = true;
-            node->pair->mark = true;
-        }
-    }
-
-    remove_marked_edges();
     remove_isolated_nodes();
+    fprintf(stderr, "Popped %d bubbles\n", bubbles_popped);
 }
 
 void Graph::create_unitigs() {
@@ -989,27 +931,10 @@ void Graph::create_unitigs() {
 
 void Graph::print_contigs() const {
 
+    uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
-        if (node == nullptr) continue;
-        if (node->id % 2 == 0) continue;
-        //if (node->id != 3301) continue;
-        fprintf(stderr, "Start: %d", node->id);
-
-        std::string contig = "";
-        auto curr_node = node.get();
-        while (curr_node->out_degree() != 0) {
-            for (const auto& edge: curr_node->suffix_edges) {
-                if (edge->end_node->id != 544 && edge->end_node->id != 4951 && edge->end_node->id != 545) {
-                    contig += edge->label();
-                    curr_node = edge->end_node;
-                    break;
-                }
-            }
-            fprintf(stderr, " %d", curr_node->id);
-        }
-        fprintf(stderr, "\n");
-        contig += curr_node->sequence;
-        fprintf(stdout, "%s\n", contig.c_str());
+        if (node == nullptr ||node->id % 2 == 0 || node->unitig_size < kMinUnitigSize) continue;
+        fprintf(stdout, ">%d\n%s\n", contig_id++, node->sequence.c_str());
     }
 }
 
@@ -1105,7 +1030,7 @@ void Graph::print_dot() const {
 
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        printf("    %d -> %d [label = \"%d, %g\"]\n", edge->begin_node->id, edge->end_node->id, edge->length, edge->score);
+        printf("    %d -> %d [label = \"%d, %g\"]\n", edge->begin_node->id, edge->end_node->id, edge->length, edge->quality);
     }
 
     printf("}\n");
@@ -1123,7 +1048,7 @@ void Graph::print_csv() const {
         printf("%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,1,%d %g\n",
             edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size,
             edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size,
-            edge->length, edge->score);
+            edge->length, edge->quality);
     }
 }
 

@@ -92,7 +92,6 @@ private:
     void remove_marked_edges();
 
     void locate_bubble_sources(std::vector<uint32_t>& dst);
-    void remove_bubble_debris();
 
     class Node;
     class Edge;

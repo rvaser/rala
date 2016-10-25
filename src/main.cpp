@@ -43,13 +43,13 @@ int main(int argc, char** argv) {
         graph->remove_bubbles();
         ++r;
     }
-    //graph->create_unitigs();
-    //graph->remove_tips();
-    //graph->create_unitigs();
-    //graph->print_contigs();
+    graph->create_unitigs();
+    graph->remove_tips();
+    graph->create_unitigs();
+    graph->print_contigs();
 
     //graph->print_dot();
-    graph->print_csv();
+    //graph->print_csv();
 
     return 0;
 }
