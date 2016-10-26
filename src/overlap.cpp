@@ -8,7 +8,7 @@
 
 namespace RALA {
 
-std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
+std::unique_ptr<Overlap> createOverlap(uint64_t id, uint32_t a_id, uint32_t b_id,
     double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
     uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length) {
 
@@ -16,7 +16,7 @@ std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id
         a_rc, a_begin, a_end, a_length, b_rc, b_begin, b_end, b_length));
 }
 
-Overlap::Overlap(uint32_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
+Overlap::Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
     uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
     uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length)
         : id_(id), a_id_(a_id - 1), a_rc_(a_rc), a_begin_(a_rc_ ? a_length - a_end : a_begin), a_end_(a_rc_ ? a_length - a_begin : a_end), a_length_(a_length),

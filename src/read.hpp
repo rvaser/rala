@@ -15,7 +15,7 @@
 namespace RALA {
 
 class Read;
-std::unique_ptr<Read> createRead(uint32_t id, const char* name, uint32_t name_length,
+std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
     const char* sequence, uint32_t sequence_length, const char* quality,
     uint32_t quality_length);
 
@@ -23,7 +23,7 @@ class Read {
     public:
         ~Read() {};
 
-        uint32_t id() const {
+        uint64_t id() const {
             return id_;
         }
 
@@ -46,21 +46,21 @@ class Read {
 
         void trim_sequence(uint32_t begin, uint32_t end);
 
-        friend std::unique_ptr<Read> createRead(uint32_t id, const char* name,
+        friend std::unique_ptr<Read> createRead(uint64_t id, const char* name,
             uint32_t name_length, const char* sequence, uint32_t sequence_length,
             const char* quality, uint32_t quality_length);
 
         friend BIOPARSER::FastqReader<Read>;
 
     private:
-        Read(uint32_t id, const char* name, uint32_t name_length, const char* sequence,
+        Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
             uint32_t sequence_length, const char* quality, uint32_t quality_length);
         Read(const Read&) = delete;
         const Read& operator=(const Read&) = delete;
 
         void create_rc();
 
-        uint32_t id_;
+        uint64_t id_;
         std::string name_;
         std::string sequence_;
         std::string quality_;

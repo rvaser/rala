@@ -14,7 +14,7 @@
 namespace RALA {
 
 class Overlap;
-std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
+std::unique_ptr<Overlap> createOverlap(uint64_t id, uint32_t a_id, uint32_t b_id,
     double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
     uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
 
@@ -23,7 +23,7 @@ class Overlap {
     public:
         ~Overlap();
 
-        uint32_t id() const {
+        uint64_t id() const {
             return id_;
         }
 
@@ -90,20 +90,20 @@ class Overlap {
         bool update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
             uint32_t b_trimmed_begin, uint32_t b_trimmed_end);
 
-        friend std::unique_ptr<Overlap> createOverlap(uint32_t id, uint32_t a_id, uint32_t b_id,
+        friend std::unique_ptr<Overlap> createOverlap(uint64_t id, uint32_t a_id, uint32_t b_id,
             double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
             uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
 
         friend BIOPARSER::MhapReader<Overlap>;
 
     private:
-        Overlap(uint32_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
+        Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
             uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
             uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
         Overlap(const Overlap&) = delete;
         const Overlap& operator=(const Overlap&) = delete;
 
-        uint32_t id_;
+        uint64_t id_;
         uint32_t a_id_;
         uint32_t a_rc_;
         uint32_t a_begin_;
