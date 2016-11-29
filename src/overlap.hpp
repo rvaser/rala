@@ -95,11 +95,17 @@ class Overlap {
             uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
 
         friend BIOPARSER::MhapReader<Overlap>;
+        friend BIOPARSER::PafReader<Overlap>;
 
     private:
         Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
             uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
             uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
+        Overlap(uint64_t id, const char* a_name, uint32_t a_name_length, uint32_t a_length,
+            uint32_t a_begin, uint32_t a_end, char orientation, const char* b_name,
+            uint32_t b_name_length, uint32_t b_length, uint32_t b_begin, uint32_t b_end,
+            uint32_t matching_bases, uint32_t overlap_length, uint32_t quality);
+
         Overlap(const Overlap&) = delete;
         const Overlap& operator=(const Overlap&) = delete;
 

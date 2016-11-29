@@ -26,88 +26,223 @@ constexpr double kChimericRatio = 1.85;
 constexpr double kMinMatchingBasesRatio = 2.5;
 constexpr double kOverlapQualityRatio = 2.57;
 constexpr double kOverlapLengthRatio = 5.17;
-constexpr uint32_t kMinCoverage = 3;
+constexpr uint32_t kMinCoverage = 2; // 3;
 constexpr uint32_t kMaxOverhang = 1000;
 constexpr double kMaxOverhangToOverlapRatio = 0.8;
 constexpr double kTransitiveEdgeEps = 0.12;
 constexpr uint32_t kMaxBubbleLength = 50000;
 constexpr uint32_t kMinUnitigSize = 5;
 
-uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap);
-
-static bool isSimilar(double a, double b, double eps) {
+bool isSimilar(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
         (b >= a * (1 - eps) && b <= a * (1 + eps));
 };
 
-void trimReads(std::vector<std::shared_ptr<Read>>& reads,
-    std::vector<std::shared_ptr<Overlap>>& overlaps,
-    uint32_t clip_size) {
+template<class T>
+void shrinkVector(std::vector<std::shared_ptr<T>>& dst, uint64_t start, const std::vector<bool>& is_valid) {
 
-    std::vector<std::vector<int32_t>> hits(reads.size());
-    auto print_pileogram = [&](uint32_t i) {
-        std::ofstream out;
-        std::string name = "output/" + std::to_string(i);
-        out.open(name);
-        for (int32_t j = 0; j < (int32_t) hits[i].size(); j+= 2) {
-            out << (hits[i][j] >> 1) << " " << (hits[i][j+1] >> 1) << std::endl;
-        }
-        out.close();
-    };
-
-    std::vector<std::vector<uint32_t>> histograms(reads.size());
-    for (uint32_t i = 0; i < reads.size(); ++i) {
-        if (reads[i] == nullptr) continue;
-        histograms[i].resize(reads[i]->sequence().size(), 0);
-    }
-    auto print_histogram = [&](uint32_t i, std::string extension) {
-        std::ofstream out;
-        std::string name = "output/" + extension + std::to_string(i);
-        out.open(name);
-        for (int32_t j = 0; j < (int32_t) histograms[i].size(); ++j) {
-            double derv = histograms[i][std::max(0,j+15)] == 0 || histograms[i][std::max(0,j-15)] == 0 ? 0 : log(histograms[i][std::max(0,j+15)] / (double) histograms[i][std::min((int32_t)histograms[i].size()-1,j-15)]);
-            out << j << " " << histograms[i][j] << " " << derv * derv << std::endl;
-        }
-        out.close();
-    };
-
-    for (auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        if (overlap->quality() < kMinMatchingBasesPerc) {
+    uint64_t i = start, j = start;
+    for (; i < dst.size(); ++i) {
+        if (is_valid[dst[i]->id()]) {
             continue;
         }
 
-        int32_t begin = (overlap->a_rc() ? overlap->a_length() - overlap->a_end() : overlap->a_begin()) + clip_size;
-        int32_t end = (overlap->a_rc() ? overlap->a_length() - overlap->a_begin() : overlap->a_end()) - clip_size;
-        hits[overlap->a_id()].push_back(begin << 1 | 0);
-        hits[overlap->a_id()].push_back(end << 1 | 1);
+        j = std::max(j, i);
+        while (j < dst.size() && !is_valid[dst[j]->id()]) {
+            ++j;
+        }
 
-        begin = (overlap->b_rc() ? overlap->b_length() - overlap->b_end() : overlap->b_begin()) + clip_size;
-        end = (overlap->b_rc() ? overlap->b_length() - overlap->b_begin() : overlap->b_end()) - clip_size;
-        hits[overlap->b_id()].push_back(begin << 1 | 0);
-        hits[overlap->b_id()].push_back(end << 1 | 1);
+        if (j >= dst.size()) {
+            break;
+        } else if (i != j) {
+            dst[i].swap(dst[j]);
+        }
+    }
+    if (i < dst.size()) {
+        dst.resize(i);
+    }
+}
+
+uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
+
+    uint32_t left_overhang = std::min(overlap->a_begin(), overlap->b_begin());
+    uint32_t right_overhang = std::min(overlap->a_length() - overlap->a_end(),
+        overlap->b_length() - overlap->b_end());
+
+    uint32_t a_len = overlap->a_end() - overlap->a_begin();
+    uint32_t b_len = overlap->b_end() - overlap->b_begin();
+
+    if (left_overhang > kMaxOverhang * 1.5 || right_overhang > kMaxOverhang * 1.5 ||
+        a_len < (a_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio ||
+        b_len < (b_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio) {
+        return 0; // internal match
+    }
+    if (overlap->a_begin() <= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) <= (overlap->b_length() - overlap->b_end())) {
+        return 1; // a contained
+    }
+    if (overlap->a_begin() >= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) >= (overlap->b_length() - overlap->b_end())) {
+        return 2; // b contained
+    }
+    if (overlap->a_begin() > overlap->b_begin()) {
+        return 3; // a to b overlap
     }
 
-    uint32_t rtot = 0;
-    std::vector<std::vector<uint32_t>> regions(reads.size());
+    return 4; // b to a overlap
+}
+
+// call after hit sorting!!
+void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& path) {
+
+    std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
+    int32_t coverage = 0;
+    uint32_t last = 0;
+    for (const auto& hit: hits) {
+        if (coverage > 0) {
+            for (uint32_t i = last; i < (hit >> 1); ++i) {
+                coverage_graph[i] += coverage;
+            }
+            last = hit >> 1;
+        }
+        if (hit & 1) --coverage;
+        else ++coverage;
+    }
+
+    std::ofstream out(path);
+    //out.open(path);
+    for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+        out << i << " " << coverage_graph[i] << std::endl;
+    }
+    out.close();
+}
+
+// call before hit sorting!!
+void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) {
+
+    std::ofstream out(path);
+    // out.open(path);
+    for (uint32_t i = 0; i < hits.size(); i+= 2) {
+        out << (hits[i] >> 1) << " " << (hits[i+1] >> 1) << std::endl;
+    }
+    out.close();
+};
+
+void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
+    const std::string& overlaps_path, uint32_t overlap_type) {
+
+    uint32_t size = 1024 * 1024 * 1024; // ~ 1GB
+    auto reader = overlap_type == 0 ?
+        BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
+        BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
+    std::vector<std::unique_ptr<Overlap>> overlaps;
+
+    while (true) {
+        auto status = reader->read_objects(overlaps, size);
+
+        is_valid_overlap.resize(is_valid_overlap.size() + overlaps.size(), true);
+
+        for (const auto& it: overlaps) {
+            uint32_t max_id = std::max(it->a_id(), it->b_id());
+            if (is_valid_read.size() <= max_id) {
+                is_valid_read.resize(max_id + 1, true);
+            }
+
+            if (it->a_end() - it->a_begin() < kMinOverlapLength ||
+                it->b_end() - it->b_begin() < kMinOverlapLength ||
+                it->matching_bases() < kMinMatchingBases) {
+                is_valid_overlap[it->id()] = false;
+                continue;
+            }
+
+            if (it->a_length() >> 1 > it->b_length()) {
+                if (it->b_begin() > kMaxOverhang >> 2 || (it->b_length() - it->b_end()) > kMaxOverhang >> 2 || it->b_end() - it->b_begin() < it->b_length() * kMaxOverhangToOverlapRatio) {
+                    continue;
+                }
+                if (it->a_begin() - it->b_begin() > kMaxOverhang << 1 && (it->a_length() - it->a_end() - (it->b_length() - it->b_end())) > kMaxOverhang << 1) {
+                    is_valid_read[it->b_id()] = false;
+                }
+            } else if (it->a_length() < it->b_length() >> 1 ){
+                if (it->a_begin() > kMaxOverhang >> 2 || (it->a_length() - it->a_end()) > kMaxOverhang >> 2 || it->a_end() - it->a_begin() < it->a_length() * kMaxOverhangToOverlapRatio) {
+                    continue;
+                }
+                if (it->b_begin() - it->a_begin() > kMaxOverhang << 1 && (it->b_length() - it->b_end() - (it->a_length() - it->a_end())) > kMaxOverhang << 1) {
+                    is_valid_read[it->a_id()] = false;
+                }
+            }
+
+            /*if (it->a_begin() <= it->b_begin() && (it->a_length() - it->a_end()) <= (it->b_length() - it->b_end())) {
+                is_valid_read[it->a_id()] = false;
+            }
+            else if (it->a_begin() <= it->b_begin() && (it->a_length() - it->a_end()) <= (it->b_length() - it->b_end())) {
+                is_valid_read[it->b_id()] = false;
+            }*/
+        }
+
+        overlaps.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+
+    uint64_t rtot = 0, otot = 0;
+    for (const auto& it: is_valid_read) if (it == true) ++rtot;
+    for (const auto& it: is_valid_overlap) if (it == true) ++otot;
+
+    fprintf(stderr, "Valid reads = %lu / %lu\n", rtot, is_valid_read.size());
+    fprintf(stderr, "valid overlaps = %lu / %lu\n", otot, is_valid_overlap.size());
+}
+
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
+    std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap, const std::string& reads_path,
+    const std::string& overlaps_path, uint32_t overlap_type) {
+
+    uint32_t size = 1024 * 1024 * 1024; // ~ 1GB
+    auto reader = overlap_type == 0 ?
+        BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
+        BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
+
+    std::vector<std::vector<uint32_t>> hits(is_valid_read.size());
+
+    while (true) {
+        auto status = reader->read_objects(overlaps, size);
+
+        for (const auto& it: overlaps) {
+            if (!is_valid_overlap[it->id()]) continue;
+            if (!is_valid_read[it->a_id()] || !is_valid_read[it->b_id()]) {
+                is_valid_overlap[it->id()] = false;
+                continue;
+            }
+
+            uint32_t begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
+            uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
+            hits[it->a_id()].push_back(begin << 1 | 0);
+            hits[it->a_id()].push_back(end << 1 | 1);
+
+            begin = it->b_rc() ? it->b_length() - it->b_end() : it->b_begin();
+            end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
+            hits[it->b_id()].push_back(begin << 1 | 0);
+            hits[it->b_id()].push_back(end << 1 | 1);
+        }
+
+        overlaps.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+    reader.reset();
+
+    std::vector<std::pair<uint32_t, uint32_t>> regions(is_valid_read.size());
     for (uint32_t i = 0; i < hits.size(); ++i) {
         if (hits[i].empty()) {
-            reads[i].reset();
+            is_valid_read[i] = false;
             continue;
         }
         std::sort(hits[i].begin(), hits[i].end());
 
         int32_t coverage = 0, min_coverage = kMinCoverage;
         int32_t begin = 0, max_begin = 0, max_end = 0;
-        uint32_t last = 0;
         for (const auto& hit: hits[i]) {
-            if (coverage > 0) {
-                for (int32_t k = last; k < hit >> 1; ++k) {
-                    histograms[i][k] += coverage;
-                }
-                last = hit >> 1;
-            }
-
             int32_t old_coverage = coverage;
             if (hit & 1) {
                 --coverage;
@@ -127,21 +262,19 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
         }
 
         if (max_end - max_begin > 0) {
-            ++rtot;
-            regions[i].push_back(max_begin - clip_size);
-            regions[i].push_back(max_end + clip_size);
+            regions[i] = std::make_pair(max_begin, max_end);
         } else {
-            reads[i].reset();
+            is_valid_read[i] = false;
         }
     }
 
     // 2nd run - chimeric test
     uint32_t chim = 0, brep = 0;
-    for (uint32_t i = 0; i < reads.size(); ++i) {
-        if (reads[i] == nullptr || regions[i].size() == 0) continue;
+    for (uint32_t i = 0; i < hits.size(); ++i) {
+        if (is_valid_read[i] == false) continue;
 
-        int32_t begin = regions[i][0];
-        int32_t length = regions[i][1] - regions[i][0];
+        int32_t begin = regions[i].first;
+        int32_t length = regions[i].second - regions[i].first;
         //int32_t begin = 0;
         //int32_t length = reads[i]->sequence().size();
 
@@ -196,107 +329,129 @@ void trimReads(std::vector<std::shared_ptr<Read>>& reads,
 
         if (left_max / (double) middle_min > kChimericRatio && right_max / (double) middle_min > kChimericRatio) {
             chim++;
-            reads[i].reset();
-            //print_histogram(i, "c");
+            is_valid_read[i] = false;
+            // printCoverageGraph(hits[i], "graphs/c" + std::to_string(i));
         } else if (left_max / (double) right_max > kChimericRatio && left_max / (left_check_sum / (double) (left_check - begin)) < kChimericRatio) {
-            //fprintf(stderr, "%d (%d - %d) || %f [%d - %d - %d] %f\n", i, regions[i][0], regions[i][1], left_max / (left_check_sum / (double) (left_check - begin)), left_max, middle_min, right_max, (right_check_sum / (double) (left_check - begin)));
             brep++;
-            //reads[i].reset();
-            //print_histogram(i, "l");
+            // is_valid_read[i] = false:
+            //printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
         } else if (right_max / (double) left_max > kChimericRatio && right_max / (right_check_sum / (double) (left_check - begin)) < kChimericRatio) {
-            //fprintf(stderr, "%d (%d - %d) || %f [%d - %d - %d] %f\n", i, regions[i][0], regions[i][1], left_max / (left_check_sum / (double) (left_check - begin)), left_max, middle_min, right_max, (right_check_sum / (double) (left_check - begin)));
             brep++;
-            //reads[i].reset();
-            //print_histogram(i, "r");
+            // is_valid_read[i] = false:
+            //printCoverageGraph(hits[i], "graphs/r" + std::to_string(i));
         }
+
+        std::vector<uint32_t>().swap(hits[i]);
     }
+    std::vector<std::vector<uint32_t>>().swap(hits);
 
     fprintf(stderr, "Removed %d chimeric reads\n", chim);
     fprintf(stderr, "Removed %d unbridged read repeats\n", brep);
 
-    uint32_t otot = 0;
-    for (auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        if (regions[overlap->a_id()].empty() || regions[overlap->b_id()].empty()) {
-            overlap.reset();
-            continue;
+    // reading valid overlaps into memory
+    auto oreader = overlap_type == 0 ?
+        BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
+        BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
+
+    uint64_t votot = 0;
+    while (true) {
+        uint64_t start = overlaps.size();
+        auto status = oreader->read_objects(overlaps, size);
+
+        for (auto& it: overlaps) {
+            if (!is_valid_overlap[it->id()]) continue;
+            if (!is_valid_read[it->a_id()] || !is_valid_read[it->b_id()]) {
+                is_valid_overlap[it->id()] = false;
+                continue;
+            }
+
+            bool is_valid = it->update(
+                regions[it->a_id()].first,
+                regions[it->a_id()].second,
+                regions[it->b_id()].first,
+                regions[it->b_id()].second
+            );
+
+            if (!is_valid ||
+                it->a_end() - it->a_begin() < kMinOverlapLength ||
+                it->b_end() - it->b_begin() < kMinOverlapLength ||
+                it->matching_bases() < kMinMatchingBases ||
+                it->quality() < kMinMatchingBasesPerc) {
+
+                is_valid_overlap[it->id()] = false;
+                continue;
+            }
+
+            it->set_type(classifyOverlap(it));
+            switch (it->type()) {
+                case 0:
+                    is_valid_overlap[it->id()] = false;
+                    break;
+                case 1:
+                    is_valid_read[it->a_id()] = false;
+                    is_valid_overlap[it->id()] = false;
+                    break;
+                case 2:
+                    is_valid_read[it->b_id()] = false;
+                    is_valid_overlap[it->id()] = false;
+                    break;
+                default:
+                    ++votot;
+                    break;
+            }
         }
 
-        bool is_valid = overlap->update(regions[overlap->a_id()][0], regions[overlap->a_id()][1],
-            regions[overlap->b_id()][0], regions[overlap->b_id()][1]);
-        if (!is_valid || overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
-            overlap->b_end() - overlap->b_begin() < kMinOverlapLength) {
-            overlap.reset();
-        } else {
-            ++otot;
+        shrinkVector(overlaps, start, is_valid_overlap);
+
+        if (status == false) {
+            break;
+        }
+    }
+    oreader.reset();
+
+    fprintf(stderr, "Valid overlaps after preprocessing = %lu\n", votot);
+
+    // check if all non valid overlaps are deleted
+    bool shrink = false;
+    for (const auto& it: overlaps) {
+        if (!is_valid_read[it->a_id()] || !is_valid_read[it->b_id()]) {
+            shrink = true;
+            is_valid_overlap[it->id()] = false;
+            --votot;
         }
     }
 
-    for (uint32_t i = 0; i < reads.size(); ++i) {
-        if (reads[i] == nullptr) continue;
-        reads[i]->trim_sequence(regions[i][0], regions[i][1]);
+    if (shrink) {
+        shrinkVector(overlaps, 0, is_valid_overlap);
     }
 
-    fprintf(stderr, "Total reads: %u\n", rtot);
-    fprintf(stderr, "Total overlaps: %u\n", otot);
-}
+    fprintf(stderr, "Valid overlaps after preprocessing = %lu\n", votot);
 
-uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
+    auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
+    uint64_t vrtot = 0;
 
-    uint32_t left_overhang = std::min(overlap->a_begin(), overlap->b_begin());
-    uint32_t right_overhang = std::min(overlap->a_length() - overlap->a_end(),
-        overlap->b_length() - overlap->b_end());
+    while (true) {
+        uint64_t start = reads.size();
+        auto status = rreader->read_objects(reads, size);
 
-    uint32_t a_len = overlap->a_end() - overlap->a_begin();
-    uint32_t b_len = overlap->b_end() - overlap->b_begin();
+        for (auto& it: reads) {
+            if (!is_valid_read[it->id()]) {
+                continue;
+            }
+            it->trim_sequence(regions[it->id()].first, regions[it->id()].second);
+            ++vrtot;
+        }
 
-    if (left_overhang > kMaxOverhang * 1.5 || right_overhang > kMaxOverhang * 1.5 ||
-        a_len < (a_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio ||
-        b_len < (b_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio) {
-        return 0; // internal match
-    }
-    if (overlap->a_begin() <= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) <= (overlap->b_length() - overlap->b_end())) {
-        return 1; // a contained
-    }
-    if (overlap->a_begin() >= overlap->b_begin() && (overlap->a_length() - overlap->a_end()) >= (overlap->b_length() - overlap->b_end())) {
-        return 2; // b contained
-    }
-    if (overlap->a_begin() > overlap->b_begin()) {
-        return 3; // a to b overlap
-    }
+        shrinkVector(reads, start, is_valid_read);
 
-    return 4; // b to a overlap
-}
-
-void preprocessData(std::vector<std::shared_ptr<Read>>& reads,
-    std::vector<std::shared_ptr<Overlap>>& overlaps) {
-
-    uint32_t otot = 0;
-    for (auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        if (overlap->a_end() - overlap->a_begin() < kMinOverlapLength ||
-            overlap->b_end() - overlap->b_begin() < kMinOverlapLength ||
-            overlap->matching_bases() < kMinMatchingBases) {
-            overlap.reset();
-        } else {
-            ++otot;
+        if (status == false) {
+            break;
         }
     }
-    fprintf(stderr, "Starting hits = %u\n", otot);
+    rreader.reset();
+    fprintf(stderr, "Reads size = %zu, overlaps size = %zu\n", reads.size(), overlaps.size());
 
-    trimReads(reads, overlaps, 0);
-
-    uint32_t ftot = 0;
-    for (auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        overlap->set_type(classifyOverlap(overlap));
-        if (overlap->type() == 0 || overlap->quality() < kMinMatchingBasesPerc) {
-            overlap.reset();
-        } else {
-            ++ftot;
-        }
-    }
-    fprintf(stderr, "Hits after fitlering = %u\n", ftot);
+    fprintf(stderr, "Valid reads after preprocessing = %lu\n", vrtot);
 }
 
 class Graph::Node {
@@ -430,86 +585,65 @@ Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
     const std::vector<std::shared_ptr<Overlap>>& overlaps)
         : nodes_(), edges_() {
 
-    // remove contained reads and their overlaps before graph construction
-    std::vector<bool> is_valid(reads.size(), true);
-    for (uint32_t i = 0; i < reads.size(); ++i) {
-        if (reads[i] == nullptr) {
-            is_valid[i] = false;
-        }
-    }
-
-    for (const auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        if (overlap->type() == 1) { // a contained
-            is_valid[overlap->a_id()] = false;
-        } else if (overlap->type() == 2) { // b contained
-            is_valid[overlap->b_id()] = false;
-        }
+    uint64_t max_read_id = 0;
+    for (const auto& it: reads) {
+        max_read_id = std::max(max_read_id, it->id());
     }
 
     // create assembly graph
-    std::vector<int32_t> read_id_to_node_id(reads.size(), -1);
+    std::vector<int32_t> read_id_to_node_id(max_read_id + 1, -1);
     uint32_t node_id = 0;
     for (const auto& read: reads) {
-        if (read == nullptr) continue;
-        if (is_valid[read->id()]) {
-            read_id_to_node_id[read->id()] = node_id;
+        read_id_to_node_id[read->id()] = node_id;
 
-            Node* node = new Node(node_id++, read); // normal read
-            Node* _node = new Node(node_id++, read); // reverse complement
+        Node* node = new Node(node_id++, read); // normal read
+        Node* _node = new Node(node_id++, read); // reverse complement
 
-            node->pair = _node;
-            _node->pair = node;
+        node->pair = _node;
+        _node->pair = node;
 
-            nodes_.push_back(std::unique_ptr<Node>(node));
-            nodes_.push_back(std::unique_ptr<Node>(_node));
-        }
+        nodes_.push_back(std::unique_ptr<Node>(node));
+        nodes_.push_back(std::unique_ptr<Node>(_node));
     }
 
     uint32_t edge_id = 0;
     for (const auto& overlap: overlaps) {
-        if (overlap == nullptr) continue;
-        if (is_valid[overlap->a_id()] && is_valid[overlap->b_id()]) {
-            if (overlap->type() < 3) {
-                continue;
-            }
 
-            auto a = nodes_[read_id_to_node_id[overlap->a_id()] + (overlap->a_rc() == 0 ? 0 : 1)].get();
-            auto _a = a->pair;
+        auto a = nodes_[read_id_to_node_id[overlap->a_id()] + (overlap->a_rc() == 0 ? 0 : 1)].get();
+        auto _a = a->pair;
 
-            auto b = nodes_[read_id_to_node_id[overlap->b_id()] + (overlap->b_rc() == 0 ? 0 : 1)].get();
-            auto _b = b->pair;
+        auto b = nodes_[read_id_to_node_id[overlap->b_id()] + (overlap->b_rc() == 0 ? 0 : 1)].get();
+        auto _b = b->pair;
 
-            if (overlap->type() == 3) { // a to b overlap
-                Edge* edge = new Edge(edge_id++, overlap, a, b, 0);
-                Edge* _edge = new Edge(edge_id++, overlap, _b, _a, 1);
+        if (overlap->type() == 3) { // a to b overlap
+            Edge* edge = new Edge(edge_id++, overlap, a, b, 0);
+            Edge* _edge = new Edge(edge_id++, overlap, _b, _a, 1);
 
-                edge->pair = _edge;
-                _edge->pair = edge;
+            edge->pair = _edge;
+            _edge->pair = edge;
 
-                edges_.push_back(std::unique_ptr<Edge>(edge));
-                edges_.push_back(std::unique_ptr<Edge>(_edge));
+            edges_.push_back(std::unique_ptr<Edge>(edge));
+            edges_.push_back(std::unique_ptr<Edge>(_edge));
 
-                a->suffix_edges.push_back(edge);
-                _a->prefix_edges.push_back(_edge);
-                b->prefix_edges.push_back(edge);
-                _b->suffix_edges.push_back(_edge);
+            a->suffix_edges.push_back(edge);
+            _a->prefix_edges.push_back(_edge);
+            b->prefix_edges.push_back(edge);
+            _b->suffix_edges.push_back(_edge);
 
-            } else if (overlap->type() == 4) { // b to a overlap
-                Edge* edge = new Edge(edge_id++, overlap, b, a, 1);
-                Edge* _edge = new Edge(edge_id++, overlap, _a, _b, 0);
+        } else if (overlap->type() == 4) { // b to a overlap
+            Edge* edge = new Edge(edge_id++, overlap, b, a, 1);
+            Edge* _edge = new Edge(edge_id++, overlap, _a, _b, 0);
 
-                edge->pair = _edge;
-                _edge->pair = edge;
+            edge->pair = _edge;
+            _edge->pair = edge;
 
-                edges_.push_back(std::unique_ptr<Edge>(edge));
-                edges_.push_back(std::unique_ptr<Edge>(_edge));
+            edges_.push_back(std::unique_ptr<Edge>(edge));
+            edges_.push_back(std::unique_ptr<Edge>(_edge));
 
-                b->suffix_edges.push_back(edge);
-                _b->prefix_edges.push_back(_edge);
-                a->prefix_edges.push_back(edge);
-                _a->suffix_edges.push_back(_edge);
-            }
+            b->suffix_edges.push_back(edge);
+            _b->prefix_edges.push_back(_edge);
+            a->prefix_edges.push_back(edge);
+            _a->suffix_edges.push_back(_edge);
         }
     }
 

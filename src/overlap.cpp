@@ -25,6 +25,17 @@ Overlap::Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32
         matching_bases_((uint32_t) (length_ * quality_ + 0.499)), type_() {
 }
 
+Overlap::Overlap(uint64_t id, const char* a_name, uint32_t a_name_length, uint32_t a_length,
+    uint32_t a_begin, uint32_t a_end, char orientation, const char* b_name,
+    uint32_t b_name_length, uint32_t b_length, uint32_t b_begin, uint32_t b_end,
+    uint32_t matching_bases, uint32_t overlap_length, uint32_t quality)
+        : id_(id), a_id_(atoi(a_name)-1), a_rc_(0), a_begin_(a_begin), a_end_(a_end), a_length_(a_length),
+        b_id_(atoi(b_name)-1), b_rc_(orientation == '+' ? 0 : 1), b_begin_(b_rc_ ? b_length - b_end : b_begin),
+        b_end_(b_rc_ ? b_length - b_begin : b_end), b_length_(b_length), quality_(matching_bases / (double) overlap_length),
+        length_(overlap_length), matching_bases_(matching_bases), type_() {
+
+}
+
 Overlap::~Overlap() {
 }
 

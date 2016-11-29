@@ -15,6 +15,6 @@ for i in range(int(sys.argv[1])):
     if(file_name != ""):
         test = pandas.read_csv(file_name, delimiter=" ", header=None)
         plt.plot(test[0], test[1])
-	plt.plot(test[0], test[2], 'r^')
+	    # plt.plot(test[0], test[2], 'r^')
         plt.savefig(file_name + "_hist.png")
         plt.clf()

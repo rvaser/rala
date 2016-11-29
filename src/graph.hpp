@@ -12,17 +12,21 @@
 namespace RALA {
 
 class Read;
+class ReadFrame;
 class Overlap;
-/*
- * @brief Trims reads from both sides based on read to read overlaps (taken from Miniasm);
- * Removes chimeric reads (taken from Miniasm)
- * (Li 2016)
- */
-void preprocessData(std::vector<std::shared_ptr<Read>>& reads,
-    std::vector<std::shared_ptr<Overlap>>& overlaps);
 
-void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,
-    const std::vector<std::shared_ptr<Overlap>>& overlaps);
+/*
+ * @brief Remove contained reads and their overlaps; Remove unreliable overlaps
+ */
+void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
+    const std::string& overlaps_path, uint32_t overlap_type);
+
+/*
+ * @brief Trims reads from both sides based on read to read overlaps (Li 2016);
+ */
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
+    std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap, const std::string& reads_path,
+    const std::string& overlaps_path, uint32_t overlap_type);
 
 class Graph;
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
@@ -96,8 +100,8 @@ private:
     class Node;
     class Edge;
 
-    std::vector<std::unique_ptr<Node>> nodes_;
-    std::vector<std::unique_ptr<Edge>> edges_;
+    std::vector<std::shared_ptr<Node>> nodes_;
+    std::vector<std::shared_ptr<Edge>> edges_;
 };
 
 }
