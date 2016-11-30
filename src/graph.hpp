@@ -19,7 +19,7 @@ class Overlap;
  * @brief Remove contained reads and their overlaps; Remove unreliable overlaps
  */
 void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
-    const std::string& overlaps_path, uint32_t overlap_type);
+    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type);
 
 /*
  * @brief Trims reads from both sides based on read to read overlaps (Li 2016);

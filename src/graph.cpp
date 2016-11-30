@@ -127,9 +127,29 @@ void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) 
 };
 
 void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
-    const std::string& overlaps_path, uint32_t overlap_type) {
+    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
 
     uint32_t size = 1024 * 1024 * 1024; // ~ 1GB
+    auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
+    std::vector<std::unique_ptr<Read>> reads;
+    std::vector<uint32_t> read_lengths;
+
+    while (true) {
+        auto status = rreader->read_objects(reads, size);
+        read_lengths.resize(read_lengths.size() + reads.size());
+
+        for (const auto& it: reads) {
+            read_lengths[it->id()] = it->sequence().size();
+        }
+
+        reads.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+    rreader.reset();
+
     auto reader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
@@ -141,6 +161,21 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
         is_valid_overlap.resize(is_valid_overlap.size() + overlaps.size(), true);
 
         for (const auto& it: overlaps) {
+
+            if (it->a_begin() > read_lengths[it->a_id()] ||
+                it->a_end() > read_lengths[it->a_id()] ||
+                it->a_length() != read_lengths[it->a_id()] ||
+                it->b_begin() > read_lengths[it->b_id()] ||
+                it->b_end() > read_lengths[it->b_id()] ||
+                it->b_length() != read_lengths[it->b_id()]) {
+
+                fprintf(stderr, "FAULTY OVERLAP %lu! Len[a,b = %u, %u]! -->  %u %u %u %u %c %u %u %u %u %u\n",
+                    it->id(), read_lengths[it->a_id()], read_lengths[it->b_id()],
+                    it->a_id(), it->a_length(), it->a_begin(), it->a_end(), it->a_rc() || it->b_rc() ? '-' : '+',
+                    it->b_id(), it->b_length(), it->b_begin(), it->b_end(), it->matching_bases());
+                exit(1);
+            }
+
             uint32_t max_id = std::max(it->a_id(), it->b_id());
             if (is_valid_read.size() <= max_id) {
                 is_valid_read.resize(max_id + 1, true);

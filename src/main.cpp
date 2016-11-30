@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     uint32_t overlap_type = atoi(argv[3]);
 
     std::vector<bool> is_valid_read, is_valid_overlap;
-    prefilterData(is_valid_read, is_valid_overlap, overlaps_path, overlap_type);
+    prefilterData(is_valid_read, is_valid_overlap, reads_path, overlaps_path, overlap_type);
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
