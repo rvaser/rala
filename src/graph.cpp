@@ -19,6 +19,8 @@
 
 namespace RALA {
 
+constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
+
 constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.055;
@@ -129,13 +131,12 @@ void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) 
 void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
     const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
 
-    uint32_t size = 1024 * 1024 * 1024; // ~ 1GB
     auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
     std::vector<std::unique_ptr<Read>> reads;
     std::vector<uint32_t> read_lengths;
 
     while (true) {
-        auto status = rreader->read_objects(reads, size);
+        auto status = rreader->read_objects(reads, kChunkSize);
         read_lengths.resize(read_lengths.size() + reads.size());
 
         for (const auto& it: reads) {
@@ -150,13 +151,13 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
     }
     rreader.reset();
 
-    auto reader = overlap_type == 0 ?
+    auto oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
     std::vector<std::unique_ptr<Overlap>> overlaps;
 
     while (true) {
-        auto status = reader->read_objects(overlaps, size);
+        auto status = oreader->read_objects(overlaps, kChunkSize);
 
         is_valid_overlap.resize(is_valid_overlap.size() + overlaps.size(), true);
 
@@ -231,15 +232,14 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap, const std::string& reads_path,
     const std::string& overlaps_path, uint32_t overlap_type) {
 
-    uint32_t size = 1024 * 1024 * 1024; // ~ 1GB
-    auto reader = overlap_type == 0 ?
+    auto oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
 
     std::vector<std::vector<uint32_t>> hits(is_valid_read.size());
 
     while (true) {
-        auto status = reader->read_objects(overlaps, size);
+        auto status = oreader->read_objects(overlaps, kChunkSize);
 
         for (const auto& it: overlaps) {
             if (!is_valid_overlap[it->id()]) continue;
@@ -265,7 +265,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             break;
         }
     }
-    reader.reset();
+    oreader.reset();
 
     std::vector<std::pair<uint32_t, uint32_t>> regions(is_valid_read.size());
     for (uint32_t i = 0; i < hits.size(); ++i) {
@@ -384,16 +384,18 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     fprintf(stderr, "Removed %d unbridged read repeats\n", brep);
 
     // reading valid overlaps into memory
-    auto oreader = overlap_type == 0 ?
+    oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
 
     uint64_t votot = 0;
     while (true) {
         uint64_t start = overlaps.size();
-        auto status = oreader->read_objects(overlaps, size);
+        uint64_t o = start;
+        auto status = oreader->read_objects(overlaps, kChunkSize);
 
-        for (auto& it: overlaps) {
+        for (; o < overlaps.size(); ++o) {
+            auto& it = overlaps[o];
             if (!is_valid_overlap[it->id()]) continue;
             if (!is_valid_read[it->a_id()] || !is_valid_read[it->b_id()]) {
                 is_valid_overlap[it->id()] = false;
@@ -467,9 +469,11 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
     while (true) {
         uint64_t start = reads.size();
-        auto status = rreader->read_objects(reads, size);
+        uint64_t r = start;
+        auto status = rreader->read_objects(reads, kChunkSize);
 
-        for (auto& it: reads) {
+        for (; r < reads.size(); ++r) {
+            auto& it = reads[r];
             if (!is_valid_read[it->id()]) {
                 continue;
             }
