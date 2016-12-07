@@ -501,7 +501,7 @@ class Graph::Node {
                 prefix_edges(), suffix_edges(), unitig_size(1), mark(false) {
         }
         // Unitig
-        Node(uint32_t _id, Node* begin_node, Node* end_node);
+        Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges);
         Node(const Node&) = delete;
         const Node& operator=(const Node&) = delete;
 
@@ -575,7 +575,7 @@ class Graph::Edge {
         bool mark;
 };
 
-Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
+Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
         unitig_size(), mark(false) {
 
@@ -589,6 +589,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node) :
     while (curr_node->id != end_node->id) {
         auto* edge = curr_node->suffix_edges.front();
         edge->mark = true;
+        marked_edges.insert(edge->id);
 
         unitig_size += curr_node->unitig_size;
         length += edge->length;
@@ -622,7 +623,7 @@ std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& rea
 
 Graph::Graph(const std::vector<std::shared_ptr<Read>>& reads,
     const std::vector<std::shared_ptr<Overlap>>& overlaps)
-        : nodes_(), edges_() {
+        : nodes_(), edges_(), marked_edges_() {
 
     uint64_t max_read_id = 0;
     for (const auto& it: reads) {
@@ -724,6 +725,8 @@ void Graph::remove_transitive_edges() {
                     if (isSimilar(edge_xy->length + edge_yz->length, candidate_edge[z]->length, kTransitiveEdgeEps)) {
                         candidate_edge[z]->mark = true;
                         candidate_edge[z]->pair->mark = true;
+                        marked_edges_.insert(candidate_edge[z]->id);
+                        marked_edges_.insert(candidate_edge[z]->pair->id);
                         ttot += 2;
                     }
                 }
@@ -759,6 +762,8 @@ void Graph::remove_long_edges() {
                 if (edge1->matching_bases() > kMinMatchingBasesRatio * edge2->matching_bases()) {
                     edge2->mark = true;
                     edge2->pair->mark = true;
+                    marked_edges_.insert(edge2->id);
+                    marked_edges_.insert(edge2->pair->id);
                     ++total;
                 }
             }
@@ -773,7 +778,13 @@ void Graph::remove_long_edges() {
 void Graph::remove_tips() {
 
     for (const auto& node: nodes_) {
-        if (node == nullptr || !node->is_tip()) continue;
+        if (node == nullptr) {
+            continue;
+        }
+        fprintf(stderr, "Considering node %d for tip removal\r", node->id);
+        if (!node->is_tip()) {
+            continue;
+        }
 
         uint32_t num_removed_edges = 0;
 
@@ -782,6 +793,8 @@ void Graph::remove_tips() {
                 // fprintf(stderr, "Removing %d\n", edge->begin_node->id);
                 edge->mark = true;
                 edge->pair->mark = true;
+                marked_edges_.insert(edge->id);
+                marked_edges_.insert(edge->pair->id);
                 ++num_removed_edges;
             }
         }
@@ -793,6 +806,8 @@ void Graph::remove_tips() {
 
         remove_marked_edges();
     }
+
+    fprintf(stderr, "\nTip removal is done!\n");
 
     remove_isolated_nodes();
 }
@@ -873,6 +888,8 @@ void Graph::remove_cycles() {
 
             worst_edge->mark = true;
             worst_edge->pair->mark = true;
+            marked_edges_.insert(worst_edge->id);
+            marked_edges_.insert(worst_edge->pair->id);
         }
 
         remove_marked_edges();
@@ -935,6 +952,8 @@ void Graph::remove_bubbles() {
                 if (edge->end_node->id == path[i + 1]) {
                     edge->mark = true;
                     edge->pair->mark = true;
+                    marked_edges_.insert(edge->id);
+                    marked_edges_.insert(edge->pair->id);
                     break;
                 }
             }
@@ -948,8 +967,9 @@ void Graph::remove_bubbles() {
     locate_bubble_sources(bubble_candidates);
     for (const auto& id: bubble_candidates) {
         const auto& node = nodes_[id];
+        fprintf(stderr, "Considering bubble source candidate %d for bubble popping\r", id);
 
-    // for (const auto& node: nodes_) {
+        // for (const auto& node: nodes_) {
         if (node == nullptr || node->out_degree() < 2) continue;
 
         bool found_sink = false;
@@ -994,23 +1014,23 @@ void Graph::remove_bubbles() {
         }
 
         if (found_sink) {
-            fprintf(stderr, "Source = %u, sink = %u, sink_predecesors = [%u, %u]\n", source, sink, predecessor[sink], sink_other_predecesor);
+            // fprintf(stderr, "Source = %u, sink = %u, sink_predecesors = [%u, %u]\n", source, sink, predecessor[sink], sink_other_predecesor);
 
             std::vector<uint32_t> path, other_path;
             extract_path(path, source, sink);
             other_path.push_back(sink);
             extract_path(other_path, source, sink_other_predecesor);
 
-            fprintf(stderr, "Path 1:");
-            for (const auto& it: path) fprintf(stderr, " %d", it);
-            fprintf(stderr, "\n");
+            // fprintf(stderr, "Path 1:");
+            // for (const auto& it: path) fprintf(stderr, " %d", it);
+            // fprintf(stderr, "\n");
 
-            fprintf(stderr, "Path 2:");
-            for (const auto& it: other_path) fprintf(stderr, " %d", it);
-            fprintf(stderr, "\n");
+            // fprintf(stderr, "Path 2:");
+            // for (const auto& it: other_path) fprintf(stderr, " %d", it);
+            // fprintf(stderr, "\n");
 
             if (!is_valid_bubble(path, other_path)) {
-                fprintf(stderr, "Not valid bubble!\n");
+                // fprintf(stderr, "Not valid bubble!\n");
             } else {
                 uint32_t path_reads = 0, path_matching_bases = 0;
                 double path_quality = 0;
@@ -1021,15 +1041,15 @@ void Graph::remove_bubbles() {
                 path_params(other_path, other_path_reads, other_path_matching_bases,
                     other_path_quality);
 
-                fprintf(stderr, "Path 1 = (%d, %d, %g) | Path 2 = (%d, %d, %g) | Worse path is ",
-                    path_reads, path_matching_bases, path_quality,
-                    other_path_reads, other_path_matching_bases, other_path_quality);
+                // fprintf(stderr, "Path 1 = (%d, %d, %g) | Path 2 = (%d, %d, %g) | Worse path is ",
+                //     path_reads, path_matching_bases, path_quality,
+                //     other_path_reads, other_path_matching_bases, other_path_quality);
 
                 if (path_reads > other_path_reads || (path_reads == other_path_reads && path_matching_bases > other_path_matching_bases)) {
-                    fprintf(stderr, "2\n");
+                    // fprintf(stderr, "2\n");
                     remove_path(other_path);
                 } else {
-                    fprintf(stderr, "1\n");
+                    // fprintf(stderr, "1\n");
                     remove_path(path);
                 }
                 remove_marked_edges();
@@ -1046,6 +1066,7 @@ void Graph::remove_bubbles() {
     }
 
     remove_isolated_nodes();
+    if (bubble_candidates.size() != 0) fprintf(stderr, "\n");
     fprintf(stderr, "Popped %d bubbles\n", bubbles_popped);
 }
 
@@ -1057,7 +1078,9 @@ void Graph::create_unitigs() {
 
     for (const auto& node: nodes_) {
         if (node == nullptr || visited[node->id] || node->is_junction()) continue;
+        fprintf(stderr, "Considering node %d for unittiging\r", node->id);
 
+        bool valid = true;
         auto bnode = node.get();
         while (!bnode->is_junction()) {
             visited[bnode->id] = true;
@@ -1066,6 +1089,10 @@ void Graph::create_unitigs() {
                 break;
             }
             bnode = bnode->prefix_edges.front()->begin_node;
+            if (visited[bnode->id] == true) {
+                valid = false;
+                break;
+            }
         }
 
         auto enode = node.get();
@@ -1076,14 +1103,18 @@ void Graph::create_unitigs() {
                 break;
             }
             enode = enode->suffix_edges.front()->end_node;
+            if (visited[enode->id] == true) {
+                valid = false;
+                break;
+            }
         }
 
-        if (bnode->id == enode->id) {
+        if (bnode->id == enode->id || valid == false) {
             continue;
         }
 
-        Node* unitig = new Node(node_id++, bnode, enode); // normal
-        Node* _unitig = new Node(node_id++, enode->pair, bnode->pair); // reverse complement
+        Node* unitig = new Node(node_id++, bnode, enode, marked_edges_); // normal
+        Node* _unitig = new Node(node_id++, enode->pair, bnode->pair, marked_edges_); // reverse complement
 
         unitig->pair = _unitig;
         _unitig->pair = unitig;
@@ -1098,6 +1129,8 @@ void Graph::create_unitigs() {
         nodes_.push_back(std::move(node));
     }
 
+    fprintf(stderr, "\nUnittiging done!\n");
+
     remove_marked_edges();
     remove_isolated_nodes();
 }
@@ -1106,7 +1139,7 @@ void Graph::print_contigs() const {
 
     uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
-        if (node == nullptr ||node->id % 2 == 0 || node->unitig_size < kMinUnitigSize) continue;
+        if (node == nullptr || node->id % 2 == 0 || node->unitig_size < kMinUnitigSize) continue;
         fprintf(stdout, ">%d\n%s\n", contig_id++, node->sequence.c_str());
     }
 }
@@ -1121,6 +1154,7 @@ void Graph::locate_bubble_sources(std::vector<uint32_t>& dst) {
         if (node == nullptr || marks[node->id] == true) {
             continue;
         }
+        fprintf(stderr, "Considering node %d as bubble source\r", node->id);
 
         node_que.push_back(node->id);
         while (!node_que.empty()) {
@@ -1151,6 +1185,8 @@ void Graph::locate_bubble_sources(std::vector<uint32_t>& dst) {
         }
     }
 
+    fprintf(stderr, "\nBubble candidates found (%zu)!\n", dst.size());
+
     /*for (const auto& it: dst) {
         fprintf(stderr, "%d ", it);
     }
@@ -1170,18 +1206,33 @@ void Graph::remove_marked_edges() {
         }
     };
 
-    for (const auto& node: nodes_) {
+    std::unordered_set<uint32_t> marked_nodes;
+    for (const auto& it: marked_edges_) {
+        marked_nodes.insert(edges_[it]->begin_node->id);
+        marked_nodes.insert(edges_[it]->end_node->id);
+    }
+
+    for (const auto& it: marked_nodes) {
+        delete_edges(nodes_[it]->prefix_edges);
+        delete_edges(nodes_[it]->suffix_edges);
+    }
+
+    for (const auto& it: marked_edges_) {
+        edges_[it].reset();
+    }
+    marked_edges_.clear();
+
+    /*for (const auto& node: nodes_) {
         if (node == nullptr) continue;
         delete_edges(node->prefix_edges);
         delete_edges(node->suffix_edges);
     }
-
     for (auto& edge: edges_) {
         if (edge == nullptr) continue;
         if (edge->mark == true) {
             edge.reset();
         }
-    }
+    }*/
 }
 
 void Graph::print_dot() const {

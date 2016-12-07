@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <vector>
+#include <unordered_set>
 
 namespace RALA {
 
@@ -102,6 +103,7 @@ private:
 
     std::vector<std::shared_ptr<Node>> nodes_;
     std::vector<std::shared_ptr<Edge>> edges_;
+    std::unordered_set<uint32_t> marked_edges_;
 };
 
 }

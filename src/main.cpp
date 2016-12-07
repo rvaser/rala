@@ -32,18 +32,18 @@ int main(int argc, char** argv) {
 
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
-    graph->create_unitigs();
-    //graph->remove_long_edges();
+    // graph->create_unitigs();
+    // graph->remove_long_edges();
     uint32_t r = 0;
+    fprintf(stderr, "\n");
     while (r < 10) {
-        //graph->create_unitigs();
+        fprintf(stderr, "Simplification round %d {\n", r);
+        graph->create_unitigs();
         graph->remove_tips();
         graph->remove_bubbles();
         ++r;
+        fprintf(stderr, "}\n\n");
     }
-    graph->create_unitigs();
-    graph->remove_tips();
-    graph->create_unitigs();
     graph->print_contigs();
 
     //graph->print_dot();
