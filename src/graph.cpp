@@ -1,3 +1,4 @@
+
 /*!
  * @file graph.cpp
  *
@@ -32,8 +33,8 @@ constexpr uint32_t kMinCoverage = 2; // 3;
 constexpr uint32_t kMaxOverhang = 1000;
 constexpr double kMaxOverhangToOverlapRatio = 0.8;
 constexpr double kTransitiveEdgeEps = 0.12;
-constexpr uint32_t kMaxBubbleLength = 50000;
-constexpr uint32_t kMinUnitigSize = 5;
+constexpr uint32_t kMaxBubbleLength = 500000;
+constexpr uint32_t kMinUnitigSize = 6;
 
 bool isSimilar(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
@@ -103,8 +104,8 @@ void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& pa
             for (uint32_t i = last; i < (hit >> 1); ++i) {
                 coverage_graph[i] += coverage;
             }
-            last = hit >> 1;
         }
+        last = hit >> 1;
         if (hit & 1) --coverage;
         else ++coverage;
     }
@@ -115,6 +116,45 @@ void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& pa
         out << i << " " << coverage_graph[i] << std::endl;
     }
     out.close();
+}
+
+bool printCoverageGraphIfChimeric(const std::vector<uint32_t>& hits, const std::string& path, uint32_t i) {
+
+    std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
+    int32_t coverage = 0;
+    uint32_t last = 0;
+    for (const auto& hit: hits) {
+        if (coverage > 0) {
+            for (uint32_t i = last; i < (hit >> 1); ++i) {
+                coverage_graph[i] += coverage;
+            }
+        }
+        last = hit >> 1;
+        if (hit & 1) --coverage;
+        else ++coverage;
+    }
+
+    uint32_t offset = std::max(1000U, uint32_t(0.05 * ((hits.back()>>1) - (hits.front()>>1))));
+    for (uint32_t i = offset; i < coverage_graph.size() - offset; ++i) {
+        uint32_t left_max = 0, right_max = 0;;
+        for (uint32_t j = i - offset; j < i; ++j) {
+            left_max = std::max(left_max, coverage_graph[j]);
+        }
+        for (uint32_t j = i + 1; j < i + offset; ++j) {
+            right_max = std::max(right_max, coverage_graph[j]);
+        }
+        uint32_t min = coverage_graph[i] * kChimericRatio;
+        if (left_max > min && right_max > min) {
+            std::ofstream out(path);
+            //out.open(path);
+            for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+                out << i << " " << coverage_graph[i] << std::endl;
+            }
+            out.close();
+            return true;
+        }
+    }
+    return false;
 }
 
 // call before hit sorting!!
@@ -151,11 +191,16 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
     }
     rreader.reset();
 
+    /*for (const auto& it: read_lengths) {
+        fprintf(stderr, "%d\n", it);
+    }
+    exit(1);*/
+
     auto oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
     std::vector<std::unique_ptr<Overlap>> overlaps;
-
+    uint32_t self_match = 0;
     while (true) {
         auto status = oreader->read_objects(overlaps, kChunkSize);
 
@@ -175,6 +220,11 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
                     it->a_id(), it->a_length(), it->a_begin(), it->a_end(), it->a_rc() || it->b_rc() ? '-' : '+',
                     it->b_id(), it->b_length(), it->b_begin(), it->b_end(), it->matching_bases());
                 exit(1);
+            }
+            if (it->a_id() == it->b_id()) {
+                is_valid_overlap[it->id()] = false;
+                ++self_match;
+                continue;
             }
 
             uint32_t max_id = std::max(it->a_id(), it->b_id());
@@ -219,6 +269,7 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
             break;
         }
     }
+    fprintf(stderr, "Number of self matches = %u\n", self_match);
 
     uint64_t rtot = 0, otot = 0;
     for (const auto& it: is_valid_read) if (it == true) ++rtot;
@@ -268,12 +319,43 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     oreader.reset();
 
     std::vector<std::pair<uint32_t, uint32_t>> regions(is_valid_read.size());
+    uint32_t chim = 0;
     for (uint32_t i = 0; i < hits.size(); ++i) {
         if (hits[i].empty()) {
             is_valid_read[i] = false;
             continue;
         }
+        /*if (i == 39696) {
+            printPileGraph(hits[i], "graphs/" + std::to_string(i));
+        }*/
         std::sort(hits[i].begin(), hits[i].end());
+        if (printCoverageGraphIfChimeric(hits[i], "graphs/c" + std::to_string(i), i)) {
+            is_valid_read[i] = false;
+        }
+        //continue;
+
+        if (i == 32462 || i == 39696) {
+            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
+        }
+
+        /*if (i == 85123 || i == 62667 || i == 57932 || i == 66404 || i == 32462 ||
+            i == 65784 || i == 77702 || i == 41549 || i == 39696) {
+            is_valid_read[i] = false;
+            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
+            continue;
+        }*/
+
+        int32_t start = hits[i].front() >> 1;
+        int32_t end = hits[i].back() >> 1;
+
+        if (start > end) {
+            continue;
+        }
+
+        int32_t read_length = end - start;
+        int32_t left_margin = start + read_length / 20;
+        int32_t right_margin = end - read_length / 20;
+        int32_t min_left = 0, min_right = 0, min = 1000000000;
 
         int32_t coverage = 0, min_coverage = kMinCoverage;
         int32_t begin = 0, max_begin = 0, max_end = 0;
@@ -284,14 +366,22 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             } else {
                 ++coverage;
             }
+            int32_t pos = hit >> 1;
             if (old_coverage < min_coverage && coverage >= min_coverage) {
-                begin = hit >> 1;
+                begin = pos;
             } else if (old_coverage >= min_coverage && coverage < min_coverage) {
-                int32_t end = (hit >> 1);
-                int32_t length = end - begin;
+                int32_t length = pos - begin;
                 if (length > max_end - max_begin) {
                     max_begin = begin;
-                    max_end = end;
+                    max_end = pos;
+                }
+            }
+            if (pos > left_margin && pos < right_margin) {
+                if (min > coverage) {
+                    min = coverage;
+                    min_left = pos;
+                } else if (min + 1 == coverage && min_right <= min_left) {
+                    min_right = pos;
                 }
             }
         }
@@ -301,87 +391,40 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         } else {
             is_valid_read[i] = false;
         }
-    }
 
-    // 2nd run - chimeric test
-    uint32_t chim = 0, brep = 0;
-    for (uint32_t i = 0; i < hits.size(); ++i) {
-        if (is_valid_read[i] == false) continue;
+        // if (i == 17906) fprintf(stderr, "%d] %d at %d - %d\n", i, min, min_left, min_right);
 
-        int32_t begin = regions[i].first;
-        int32_t length = regions[i].second - regions[i].first;
-        //int32_t begin = 0;
-        //int32_t length = reads[i]->sequence().size();
-
-        int32_t left_border = begin + length / 4;
-        int32_t right_border = begin + 3 * length / 4;
-
-        int32_t left_check = begin + length * 0.05;
-        bool lcheck = true;
-        int32_t left_check_sum = 0, left_check_last = 0;
-        int32_t right_check = begin + length * 0.95;
-        int32_t right_check_sum = 0, right_check_last = right_check;
-
-        int32_t left_max = 0;
-        int32_t right_max = 0;
-        int32_t middle_min = 10000;
-
-        int32_t coverage = 0;
-        for (const auto& hit: hits[i]) {
-            if (hit & 1) {
-                --coverage;
-            } else {
-                ++coverage;
+        if (min_left < min_right) {
+            coverage = 0;
+            int32_t kMarginOffset = 250;
+            int32_t left_max = 0, right_max = 0;
+            for (const auto& hit: hits[i]) {
+                if (hit & 1) {
+                    --coverage;
+                } else {
+                    ++coverage;
+                }
+                int32_t pos = hit >> 1;
+                if (pos > min_left - kMarginOffset && pos <= min_left) {
+                    left_max = std::max(left_max, coverage);
+                } else if (pos >= min_right && pos < min_right + kMarginOffset) {
+                    right_max = std::max(right_max, coverage);
+                }
             }
 
-            int32_t pos = hit >> 1;
+            //if (i == 4619) fprintf(stderr, "%d] %d at %d - %d | %d - %d\n", i, min, min_left, min_right, left_max, right_max);
 
-            if (pos < left_check) {
-                left_check_sum += coverage * (pos - left_check_last);
-                left_check_last = pos;
+            if (left_max > kChimericRatio * min && right_max > kChimericRatio * min) {
+                ++chim;
+                // is_valid_read[i] = false;
+                //printCoverageGraph(hits[i], "graphs/c" + std::to_string(i));
             }
-            if (pos > left_check && lcheck) {
-                lcheck = false;
-                left_check_sum += coverage * (left_check - left_check_last);
-            }
-
-            if (pos < left_border) {
-                left_max = std::max(left_max, coverage);
-            }
-            if (pos > left_border && pos < right_border) {
-                middle_min = std::min(middle_min, coverage);
-            }
-            if (pos > right_border) {
-                right_max = std::max(right_max, coverage);
-            }
-
-            if (pos > right_check) {
-                right_check_sum += coverage * (pos - right_check_last);
-                right_check_last = pos;
-            }
-        }
-        right_check_sum += coverage * (right_check - right_check_last);
-
-        if (left_max / (double) middle_min > kChimericRatio && right_max / (double) middle_min > kChimericRatio) {
-            chim++;
-            is_valid_read[i] = false;
-            // printCoverageGraph(hits[i], "graphs/c" + std::to_string(i));
-        } else if (left_max / (double) right_max > kChimericRatio && left_max / (left_check_sum / (double) (left_check - begin)) < kChimericRatio) {
-            brep++;
-            // is_valid_read[i] = false:
-            //printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
-        } else if (right_max / (double) left_max > kChimericRatio && right_max / (right_check_sum / (double) (left_check - begin)) < kChimericRatio) {
-            brep++;
-            // is_valid_read[i] = false:
-            //printCoverageGraph(hits[i], "graphs/r" + std::to_string(i));
         }
 
         std::vector<uint32_t>().swap(hits[i]);
     }
     std::vector<std::vector<uint32_t>>().swap(hits);
-
     fprintf(stderr, "Removed %d chimeric reads\n", chim);
-    fprintf(stderr, "Removed %d unbridged read repeats\n", brep);
 
     // reading valid overlaps into memory
     oreader = overlap_type == 0 ?
@@ -462,7 +505,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         shrinkVector(overlaps, 0, is_valid_overlap);
     }
 
-    fprintf(stderr, "Valid overlaps after preprocessing = %lu\n", votot);
+    fprintf(stderr, "Valid overlaps after preprocessing (final) = %lu\n", votot);
 
     auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
     uint64_t vrtot = 0;
@@ -502,6 +545,8 @@ class Graph::Node {
         }
         // Unitig
         Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges);
+        // Circular unitig
+        Node(uint32_t _id, Node* begin_node, std::unordered_set<uint32_t>& marked_edges);
         Node(const Node&) = delete;
         const Node& operator=(const Node&) = delete;
 
@@ -614,6 +659,34 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
     end_node->prefix_edges.clear();
     end_node->suffix_edges.clear();
     end_node->mark = true;
+}
+
+Graph::Node::Node(uint32_t _id, Node* begin_node, std::unordered_set<uint32_t>& marked_edges) :
+        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
+        unitig_size(), mark(false) {
+    fprintf(stderr, "!!! CIRCULAR UNITIG ALERT !!!\n");
+
+    uint32_t length = 0;
+    Node* curr_node = begin_node;
+    while (true) {
+        fprintf(stderr, "Curr node = %d\n", curr_node->id);
+        auto* edge = curr_node->suffix_edges.front();
+        edge->mark = true;
+        marked_edges.insert(edge->id);
+
+        unitig_size += curr_node->unitig_size;
+        length += edge->length;
+        sequence += edge->label();
+
+        curr_node->prefix_edges.clear();
+        curr_node->suffix_edges.clear();
+        curr_node->mark = true;
+
+        curr_node = edge->end_node;
+        if (curr_node->id == begin_node->id) {
+            break;
+        }
+    }
 }
 
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
@@ -1080,7 +1153,7 @@ void Graph::create_unitigs() {
         if (node == nullptr || visited[node->id] || node->is_junction()) continue;
         fprintf(stderr, "Considering node %d for unittiging\r", node->id);
 
-        bool valid = true;
+        bool is_circular = false;
         auto bnode = node.get();
         while (!bnode->is_junction()) {
             visited[bnode->id] = true;
@@ -1089,8 +1162,8 @@ void Graph::create_unitigs() {
                 break;
             }
             bnode = bnode->prefix_edges.front()->begin_node;
-            if (visited[bnode->id] == true) {
-                valid = false;
+            if (bnode->id == node->id) {
+                is_circular = true;
                 break;
             }
         }
@@ -1103,26 +1176,34 @@ void Graph::create_unitigs() {
                 break;
             }
             enode = enode->suffix_edges.front()->end_node;
-            if (visited[enode->id] == true) {
-                valid = false;
+            if (enode->id == node->id) {
+                is_circular = true;
                 break;
             }
         }
 
-        if (bnode->id == enode->id || valid == false) {
-            continue;
+        // normal
+        Node* unitig = nullptr;
+        // reverse_complement
+        Node* _unitig = nullptr;
+
+        if (is_circular) {
+            unitig = new Node(node_id++, bnode, marked_edges_);
+            _unitig = new Node(node_id++, bnode->pair, marked_edges_);
+        } else if (bnode->id != enode->id) {
+            unitig = new Node(node_id++, bnode, enode, marked_edges_);
+            _unitig = new Node(node_id++, enode->pair, bnode->pair, marked_edges_);
         }
 
-        Node* unitig = new Node(node_id++, bnode, enode, marked_edges_); // normal
-        Node* _unitig = new Node(node_id++, enode->pair, bnode->pair, marked_edges_); // reverse complement
+        if (unitig != nullptr && _unitig != nullptr) {
+            unitig->pair = _unitig;
+            _unitig->pair = unitig;
 
-        unitig->pair = _unitig;
-        _unitig->pair = unitig;
+            new_nodes.push_back(std::unique_ptr<Node>(unitig));
+            new_nodes.push_back(std::unique_ptr<Node>(_unitig));
 
-        new_nodes.push_back(std::unique_ptr<Node>(unitig));
-        new_nodes.push_back(std::unique_ptr<Node>(_unitig));
-
-        // fprintf(stderr, "Unitig: %d -> %d && %d -> %d\n", bnode->id, enode->id, enode->pair->id, bnode->pair->id);
+            // fprintf(stderr, "Unitig: %d -> %d && %d -> %d\n", bnode->id, enode->id, enode->pair->id, bnode->pair->id);
+        }
     }
 
     for (auto& node: new_nodes) {

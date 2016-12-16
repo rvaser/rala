@@ -50,9 +50,12 @@ class Read {
             uint32_t name_length, const char* sequence, uint32_t sequence_length,
             const char* quality, uint32_t quality_length);
 
+        friend BIOPARSER::FastaReader<Read>;
         friend BIOPARSER::FastqReader<Read>;
 
     private:
+        Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
+            uint32_t sequence_length);
         Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
             uint32_t sequence_length, const char* quality, uint32_t quality_length);
         Read(const Read&) = delete;
