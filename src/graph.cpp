@@ -25,7 +25,7 @@ constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
 constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.055;
-constexpr double kChimericRatio = 1.85;
+constexpr double kChimericRatio = 1.67; //1.85;
 constexpr double kMinMatchingBasesRatio = 2.5;
 constexpr double kOverlapQualityRatio = 2.57;
 constexpr double kOverlapLengthRatio = 5.17;
@@ -98,27 +98,43 @@ void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& pa
 
     std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
     int32_t coverage = 0;
-    uint32_t last = 0;
+    uint32_t last = 0, total = 0;
     for (const auto& hit: hits) {
         if (coverage > 0) {
             for (uint32_t i = last; i < (hit >> 1); ++i) {
                 coverage_graph[i] += coverage;
+                total += coverage;
             }
         }
         last = hit >> 1;
         if (hit & 1) --coverage;
         else ++coverage;
     }
-
+    double avege = total / (double) ((hits.back()>>1) - (hits.front()>>1));
     std::ofstream out(path);
     //out.open(path);
     for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-        out << i << " " << coverage_graph[i] << std::endl;
+        out << i << " " << coverage_graph[i] << " " << avege << std::endl;
     }
     out.close();
 }
 
-bool printCoverageGraphIfChimeric(const std::vector<uint32_t>& hits, const std::string& path, uint32_t i) {
+bool isChimericDistance(const std::vector<uint32_t>& hits, const std::string& path) {
+
+    auto deque_add = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t value, int32_t position) -> void {
+        while (!window.empty() && window.back().second <= value) {
+            window.pop_back();
+        }
+        window.emplace_back(position, value);
+        return;
+    };
+
+    auto deque_update = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t position) -> void {
+        while (!window.empty() && window.front().first <= position - k) {
+            window.pop_front();
+        }
+        return;
+    };
 
     std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
     int32_t coverage = 0;
@@ -134,27 +150,188 @@ bool printCoverageGraphIfChimeric(const std::vector<uint32_t>& hits, const std::
         else ++coverage;
     }
 
-    uint32_t offset = std::max(1000U, uint32_t(0.05 * ((hits.back()>>1) - (hits.front()>>1))));
-    for (uint32_t i = offset; i < coverage_graph.size() - offset; ++i) {
-        uint32_t left_max = 0, right_max = 0;;
-        for (uint32_t j = i - offset; j < i; ++j) {
-            left_max = std::max(left_max, coverage_graph[j]);
+    std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
+    int32_t k = uint32_t(0.1 * ((hits.back()>>1) - (hits.front()>>1))); // std::max(1000U, uint32_t(0.05 * ((hits.back()>>1) - (hits.front()>>1))));
+    bool is_chimeric = false;
+    int32_t length = coverage_graph.size();
+
+    for (int32_t i = -1 * k + 2; i < length - 1; ++i) {
+        if (i < length - k) {
+            deque_add(right_window, k, coverage_graph[i + k], i + k);
         }
-        for (uint32_t j = i + 1; j < i + offset; ++j) {
-            right_max = std::max(right_max, coverage_graph[j]);
-        }
-        uint32_t min = coverage_graph[i] * kChimericRatio;
-        if (left_max > min && right_max > min) {
-            std::ofstream out(path);
-            //out.open(path);
-            for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-                out << i << " " << coverage_graph[i] << std::endl;
+        deque_update(right_window, k, i + k);
+
+        if (i > 0) {
+            deque_add(left_window, k, coverage_graph[i - 1], i - 1);
+            deque_update(left_window, k, i - 1);
+            int32_t current = coverage_graph[i] * kChimericRatio;
+            if (left_window.front().second > current && right_window.front().second > current) {
+                is_chimeric = true;
+                /*std::ofstream out(path);
+                for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+                    out << i << " " << coverage_graph[i] << std::endl;
+                }
+                out.close();*/
+                break;
             }
-            out.close();
-            return true;
         }
     }
-    return false;
+
+    return is_chimeric;
+}
+
+bool isChimericJumps(const std::vector<uint32_t>& hits, const std::string& path, uint32_t id) {
+
+    auto deque_add = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t value, int32_t position) -> void {
+        while (!window.empty() && window.back().second <= value) {
+            window.pop_back();
+        }
+        window.emplace_back(position, value);
+        return;
+    };
+
+    auto deque_update = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t position) -> void {
+        while (!window.empty() && window.front().first <= position - k) {
+            window.pop_front();
+        }
+        return;
+    };
+
+    std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
+    int32_t coverage = 0;
+    uint32_t last = 0;
+    for (const auto& hit: hits) {
+        if (coverage > 0) {
+            for (uint32_t i = last; i < (hit >> 1); ++i) {
+                coverage_graph[i] += coverage;
+            }
+        }
+        last = hit >> 1;
+        if (hit & 1) --coverage;
+        else ++coverage;
+    }
+
+    std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
+    std::vector<int32_t> jumps;
+
+    int32_t k = std::max(250U, uint32_t(0.03 * ((hits.back()>>1) - (hits.front()>>1))));
+    int32_t length = coverage_graph.size();
+    bool is_chimeric = false;
+
+    for (int32_t i = -1 * k + 2; i < length - 1; ++i) {
+        if (i < length - k) {
+            deque_add(right_window, k, coverage_graph[i + k], i + k);
+        }
+        deque_update(right_window, k, i + k);
+
+        if (i > 0) {
+            deque_add(left_window, k, coverage_graph[i - 1], i - 1);
+            deque_update(left_window, k, i - 1);
+
+            int32_t current = coverage_graph[i] * kChimericRatio;
+            if (left_window.front().second > current) {
+                jumps.push_back(i << 1 | 0);
+            }
+            if (right_window.front().second > current) {
+                jumps.push_back(i << 1 | 1);
+            }
+        }
+    }
+
+    if (jumps.size() > 0) {
+        std::sort(jumps.begin(), jumps.end());
+        for (uint32_t i = 0; i < jumps.size() - 1; ++i) {
+            if (!(jumps[i] & 1) && (jumps[i + 1] & 1)) {
+                is_chimeric = true;
+                break;
+            }
+        }
+    }
+
+    /*if (is_chimeric) {
+        std::ofstream out(path);
+        for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+            out << i << " " << coverage_graph[i] << std::endl;
+        }
+        out.close();
+        return true;
+    }*/
+
+    return is_chimeric;
+}
+
+
+bool isChimeric(const std::vector<uint32_t>& hits, const std::string& path, uint32_t i) {
+
+    std::vector<uint32_t> left_max_coverage(hits.back() >> 1, 0);
+    std::vector<uint32_t> coverage_graph(hits.back() >> 1, 0);
+    int32_t coverage = 0, max_coverage = 0;
+    uint32_t last = 0;
+    for (const auto& hit: hits) {
+        max_coverage = std::max(max_coverage, coverage);
+        for (uint32_t i = last; i < (hit >> 1); ++i) {
+            coverage_graph[i] += coverage;
+            left_max_coverage[i] = max_coverage;
+        }
+        last = hit >> 1;
+        if (hit & 1) --coverage;
+        else ++coverage;
+    }
+
+    std::vector<std::pair<uint32_t, uint32_t>> breaks;
+    last = (hits.back() >> 1);
+    coverage = 0;
+    max_coverage = 0;
+    for (auto hit = hits.rbegin(); hit != hits.rend(); ++hit) {
+        max_coverage = std::max(max_coverage, coverage);
+        for (uint32_t i = (*hit >> 1); i < last; ++i) {
+            if (left_max_coverage[i] > coverage_graph[i] * kChimericRatio &&
+                max_coverage > coverage_graph[i] * kChimericRatio) {
+                breaks.emplace_back(coverage_graph[i], i);
+            }
+        }
+        last = *hit >> 1;
+        if (*hit & 1) ++coverage;
+        else --coverage;
+    }
+
+    bool is_chimeric = false;
+    if (breaks.size() > 0) {
+
+        std::sort(breaks.begin(), breaks.end());
+        if (breaks.front().first == 0) {
+            is_chimeric = true;
+        } else {
+            uint32_t lowq_region_length = 500;
+            uint32_t min = breaks.front().first;
+            uint32_t min_begin = breaks.front().second;
+            bool checked = false;
+            for (uint32_t i = 1; i < breaks.size(); ++i) {
+                if (breaks[i].first != min) {
+                    if (breaks[i-1].second - min_begin < lowq_region_length) {
+                        is_chimeric = true;
+                    }
+                    checked = true;
+                    break;
+                }
+            }
+            if (!checked && breaks.back().second - min_begin < lowq_region_length) {
+                is_chimeric = true;
+            }
+        }
+    }
+
+    /*if (is_chimeric) {
+        std::ofstream out(path);
+        //out.open(path);
+        for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+            out << i << " " << coverage_graph[i] << std::endl;
+        }
+        out.close();
+        return true;
+    }*/
+
+    return is_chimeric;
 }
 
 // call before hit sorting!!
@@ -299,13 +476,13 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 continue;
             }
 
-            uint32_t begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
-            uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
+            uint32_t begin = (it->a_rc() ? it->a_length() - it->a_end() : it->a_begin()) + 1;
+            uint32_t end = (it->a_rc() ? it->a_length() - it->a_begin() : it->a_end()) - 1;
             hits[it->a_id()].push_back(begin << 1 | 0);
             hits[it->a_id()].push_back(end << 1 | 1);
 
-            begin = it->b_rc() ? it->b_length() - it->b_end() : it->b_begin();
-            end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
+            begin = (it->b_rc() ? it->b_length() - it->b_end() : it->b_begin()) + 1;
+            end = (it->b_rc() ? it->b_length() - it->b_begin() : it->b_end()) - 1;
             hits[it->b_id()].push_back(begin << 1 | 0);
             hits[it->b_id()].push_back(end << 1 | 1);
         }
@@ -319,31 +496,23 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     oreader.reset();
 
     std::vector<std::pair<uint32_t, uint32_t>> regions(is_valid_read.size());
-    uint32_t chim = 0;
+    uint32_t jchim = 0, dchim = 0;
     for (uint32_t i = 0; i < hits.size(); ++i) {
         if (hits[i].empty()) {
             is_valid_read[i] = false;
             continue;
         }
-        /*if (i == 39696) {
-            printPileGraph(hits[i], "graphs/" + std::to_string(i));
-        }*/
+
         std::sort(hits[i].begin(), hits[i].end());
-        if (printCoverageGraphIfChimeric(hits[i], "graphs/c" + std::to_string(i), i)) {
-            is_valid_read[i] = false;
-        }
-        //continue;
 
-        if (i == 32462 || i == 39696) {
-            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
-        }
-
-        /*if (i == 85123 || i == 62667 || i == 57932 || i == 66404 || i == 32462 ||
-            i == 65784 || i == 77702 || i == 41549 || i == 39696) {
-            is_valid_read[i] = false;
-            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
-            continue;
+        /*if (isChimericDistance(hits[i], "graphs/c" + std::to_string(i))) {
+            //is_valid_read[i] = false;
+            ++dchim;
         }*/
+        if (isChimericJumps(hits[i], "graphs/c" + std::to_string(i), i)) {
+            is_valid_read[i] = false;
+            ++jchim;
+        }
 
         int32_t start = hits[i].front() >> 1;
         int32_t end = hits[i].back() >> 1;
@@ -351,11 +520,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         if (start > end) {
             continue;
         }
-
-        int32_t read_length = end - start;
-        int32_t left_margin = start + read_length / 20;
-        int32_t right_margin = end - read_length / 20;
-        int32_t min_left = 0, min_right = 0, min = 1000000000;
 
         int32_t coverage = 0, min_coverage = kMinCoverage;
         int32_t begin = 0, max_begin = 0, max_end = 0;
@@ -376,14 +540,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                     max_end = pos;
                 }
             }
-            if (pos > left_margin && pos < right_margin) {
-                if (min > coverage) {
-                    min = coverage;
-                    min_left = pos;
-                } else if (min + 1 == coverage && min_right <= min_left) {
-                    min_right = pos;
-                }
-            }
         }
 
         if (max_end - max_begin > 0) {
@@ -392,39 +548,10 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             is_valid_read[i] = false;
         }
 
-        // if (i == 17906) fprintf(stderr, "%d] %d at %d - %d\n", i, min, min_left, min_right);
-
-        if (min_left < min_right) {
-            coverage = 0;
-            int32_t kMarginOffset = 250;
-            int32_t left_max = 0, right_max = 0;
-            for (const auto& hit: hits[i]) {
-                if (hit & 1) {
-                    --coverage;
-                } else {
-                    ++coverage;
-                }
-                int32_t pos = hit >> 1;
-                if (pos > min_left - kMarginOffset && pos <= min_left) {
-                    left_max = std::max(left_max, coverage);
-                } else if (pos >= min_right && pos < min_right + kMarginOffset) {
-                    right_max = std::max(right_max, coverage);
-                }
-            }
-
-            //if (i == 4619) fprintf(stderr, "%d] %d at %d - %d | %d - %d\n", i, min, min_left, min_right, left_max, right_max);
-
-            if (left_max > kChimericRatio * min && right_max > kChimericRatio * min) {
-                ++chim;
-                // is_valid_read[i] = false;
-                //printCoverageGraph(hits[i], "graphs/c" + std::to_string(i));
-            }
-        }
-
         std::vector<uint32_t>().swap(hits[i]);
     }
     std::vector<std::vector<uint32_t>>().swap(hits);
-    fprintf(stderr, "Removed %d chimeric reads\n", chim);
+    fprintf(stderr, "Removed chimeric reads: jumps = %d, distance = %d\n", jchim, dchim);
 
     // reading valid overlaps into memory
     oreader = overlap_type == 0 ?

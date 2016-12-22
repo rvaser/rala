@@ -44,10 +44,10 @@ int main(int argc, char** argv) {
         ++r;
         fprintf(stderr, "}\n\n");
     }
-    // graph->print_contigs();
+    graph->print_contigs();
 
     // graph->print_dot();
-    graph->print_csv();
+    // graph->print_csv();
 
     return 0;
 }
