@@ -18,6 +18,9 @@ int main(int argc, char** argv) {
     std::string overlaps_path = argv[2];
     uint32_t overlap_type = atoi(argv[3]);
 
+    // findChimeriReads(overlaps_path, overlap_type);
+    // return 0;
+
     std::vector<bool> is_valid_read, is_valid_overlap;
     prefilterData(is_valid_read, is_valid_overlap, reads_path, overlaps_path, overlap_type);
 
@@ -32,13 +35,18 @@ int main(int argc, char** argv) {
 
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
-    // graph->create_unitigs();
-    // graph->remove_long_edges();
+
     uint32_t r = 0;
     fprintf(stderr, "\n");
-    while (r < 10) {
+    while (graph->remove_bubbles()) {
         fprintf(stderr, "Simplification round %d {\n", r);
-        graph->create_unitigs();
+        ++r;
+        fprintf(stderr, "}\n\n");
+    }
+    // graph->remove_selected_nodes_and_edges();
+    graph->remove_long_edges();
+    while (graph->create_unitigs()) {
+        fprintf(stderr, "Simplification round %d {\n", r);
         graph->remove_tips();
         graph->remove_bubbles();
         ++r;

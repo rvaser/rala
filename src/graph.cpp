@@ -1,4 +1,3 @@
-
 /*!
  * @file graph.cpp
  *
@@ -25,7 +24,7 @@ constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
 constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.055;
-constexpr double kChimericRatio = 1.67; //1.85;
+constexpr double kChimericRatio = 1.75;
 constexpr double kMinMatchingBasesRatio = 2.5;
 constexpr double kOverlapQualityRatio = 2.57;
 constexpr double kOverlapLengthRatio = 5.17;
@@ -64,6 +63,55 @@ void shrinkVector(std::vector<std::shared_ptr<T>>& dst, uint64_t start, const st
     if (i < dst.size()) {
         dst.resize(i);
     }
+}
+
+void findChimeriReads(const std::string& overlaps_path, uint32_t overlap_type) {
+
+    auto oreader = overlap_type == 0 ?
+        BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
+        BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
+
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    oreader->read_objects(overlaps, -1);
+
+    int32_t last_id = -1;
+    uint32_t chim = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> curr_overlaps;
+    for (const auto& it: overlaps) {
+        if ((int32_t) it->a_id() != last_id) {
+            if (curr_overlaps.size() > 1) {
+                uint32_t max_region_begin = 0, max_region_end = 0;
+                for (const auto& m: curr_overlaps) {
+                    if (m.second - m.first > max_region_end - max_region_begin) {
+                        max_region_begin = m.first;
+                        max_region_end = m.second;
+                    }
+                }
+                bool is_valid = true;
+                for (const auto& m: curr_overlaps) {
+                    if (m.first <= max_region_end && max_region_begin <= m.second) {
+                        continue;
+                    }
+                    fprintf(stderr, "[%u, %u] & %u, %u\n", max_region_begin, max_region_end, m.first, m.second);
+                    is_valid = false;
+                    break;
+                }
+                if (!is_valid) {
+                    fprintf(stderr, "Chimeric: %u\n", last_id);
+                    ++chim;
+                }
+            }
+            last_id = it->a_id();
+            curr_overlaps.clear();
+        }
+
+        curr_overlaps.emplace_back(
+            it->a_rc() ? it->a_length() - it->a_end() : it->a_begin(),
+            it->a_rc() ? it->a_length() - it->a_begin() : it->a_end()
+        );
+    }
+
+    fprintf(stderr, "Found %u chimeric reads\n", chim);
 }
 
 uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
@@ -214,7 +262,7 @@ bool isChimericJumps(const std::vector<uint32_t>& hits, const std::string& path,
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> jumps;
 
-    int32_t k = std::max(250U, uint32_t(0.03 * ((hits.back()>>1) - (hits.front()>>1))));
+    int32_t k = std::max(500U, uint32_t(0.03 * ((hits.back()>>1) - (hits.front()>>1))));
     int32_t length = coverage_graph.size();
     bool is_chimeric = false;
 
@@ -259,7 +307,6 @@ bool isChimericJumps(const std::vector<uint32_t>& hits, const std::string& path,
 
     return is_chimeric;
 }
-
 
 bool isChimeric(const std::vector<uint32_t>& hits, const std::string& path, uint32_t i) {
 
@@ -348,10 +395,11 @@ void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) 
 void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
     const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
 
+    fprintf(stderr, "Prefiltering data {\n");
+
     auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
     std::vector<std::unique_ptr<Read>> reads;
     std::vector<uint32_t> read_lengths;
-
     while (true) {
         auto status = rreader->read_objects(reads, kChunkSize);
         read_lengths.resize(read_lengths.size() + reads.size());
@@ -368,16 +416,37 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
     }
     rreader.reset();
 
-    /*for (const auto& it: read_lengths) {
-        fprintf(stderr, "%d\n", it);
-    }
-    exit(1);*/
+    auto remove_multiple_overlaps = [](std::vector<std::shared_ptr<Overlap>>& overlaps, std::vector<bool>& is_valid_overlap) -> uint32_t {
+        uint32_t num_self_matches = 0;
+        for (uint32_t i = 0; i < overlaps.size(); ++i) {
+            if (is_valid_overlap[overlaps[i]->id()] == false) {
+                continue;
+            }
+            for (uint32_t j = i + 1; j < overlaps.size(); ++j) {
+                if (is_valid_overlap[overlaps[j]->id()] == false ||
+                    overlaps[i]->b_id() != overlaps[j]->b_id()) {
+                    continue;
+                }
+                ++num_self_matches;
+                if (overlaps[i]->length() > overlaps[j]->length()) {
+                    is_valid_overlap[overlaps[i]->id()] = false;
+                    break;
+                } else {
+                    is_valid_overlap[overlaps[j]->id()] = false;
+                }
+            }
+        }
+        overlaps.clear();
+        return num_self_matches;
+    };
 
     auto oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
         BIOPARSER::createReader<Overlap, BIOPARSER::PafReader>(overlaps_path);
-    std::vector<std::unique_ptr<Overlap>> overlaps;
-    uint32_t self_match = 0;
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    std::vector<std::shared_ptr<Overlap>> curr_overlaps;
+    uint32_t num_multiple_matches = 0;
+    uint32_t num_self_matches = 0;
     while (true) {
         auto status = oreader->read_objects(overlaps, kChunkSize);
 
@@ -398,23 +467,32 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
                     it->b_id(), it->b_length(), it->b_begin(), it->b_end(), it->matching_bases());
                 exit(1);
             }
-            if (it->a_id() == it->b_id()) {
-                is_valid_overlap[it->id()] = false;
-                ++self_match;
-                continue;
-            }
 
             uint32_t max_id = std::max(it->a_id(), it->b_id());
             if (is_valid_read.size() <= max_id) {
                 is_valid_read.resize(max_id + 1, true);
             }
 
+            // self match
+            if (it->a_id() == it->b_id()) {
+                is_valid_overlap[it->id()] = false;
+                ++num_self_matches;
+                continue;
+            }
+
+            // bad overlap
             if (it->a_end() - it->a_begin() < kMinOverlapLength ||
                 it->b_end() - it->b_begin() < kMinOverlapLength ||
                 it->matching_bases() < kMinMatchingBases) {
                 is_valid_overlap[it->id()] = false;
                 continue;
             }
+
+            // check if multiple overlaps exist
+            if (curr_overlaps.size() != 0 && curr_overlaps.front()->a_id() != it->a_id()) {
+                num_multiple_matches += remove_multiple_overlaps(curr_overlaps, is_valid_overlap);
+            }
+            curr_overlaps.push_back(it);
 
             if (it->a_length() >> 1 > it->b_length()) {
                 if (it->b_begin() > kMaxOverhang >> 2 || (it->b_length() - it->b_end()) > kMaxOverhang >> 2 || it->b_end() - it->b_begin() < it->b_length() * kMaxOverhangToOverlapRatio) {
@@ -443,22 +521,47 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
         overlaps.clear();
 
         if (status == false) {
+            num_multiple_matches += remove_multiple_overlaps(curr_overlaps, is_valid_overlap);
             break;
         }
     }
-    fprintf(stderr, "Number of self matches = %u\n", self_match);
 
     uint64_t rtot = 0, otot = 0;
     for (const auto& it: is_valid_read) if (it == true) ++rtot;
     for (const auto& it: is_valid_overlap) if (it == true) ++otot;
 
-    fprintf(stderr, "Valid reads = %lu / %lu\n", rtot, is_valid_read.size());
-    fprintf(stderr, "valid overlaps = %lu / %lu\n", otot, is_valid_overlap.size());
+    fprintf(stderr, "  number of self matches = %u\n", num_self_matches);
+    fprintf(stderr, "  number of multiple matches = %u\n", num_multiple_matches);
+    fprintf(stderr, "  number of valid overlaps = %lu (out of %lu)\n", otot, is_valid_overlap.size());
+    fprintf(stderr, "  number of valid reads = %lu (out of %lu)\n", rtot, is_valid_read.size());
+    fprintf(stderr, "}\n\n");
 }
 
 void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
     std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap, const std::string& reads_path,
     const std::string& overlaps_path, uint32_t overlap_type) {
+
+    fprintf(stderr, "Preprocessing data {\n");
+
+    /*auto rreader1 = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
+    std::vector<std::unique_ptr<Read>> reads2;
+    std::vector<uint32_t> read_lengths;
+    while (true) {
+        auto status = rreader1->read_objects(reads2, kChunkSize);
+        read_lengths.resize(read_lengths.size() + reads2.size());
+        for (const auto& it: reads2) {
+            read_lengths[it->id()] = it->sequence().size();
+        }
+        reads2.clear();
+        if (status == false) {
+            break;
+        }
+    }
+    rreader1.reset();
+
+    for (const auto& it: read_lengths) {
+        fprintf(stdout, "%d\n", it);
+    }*/
 
     auto oreader = overlap_type == 0 ?
         BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(overlaps_path) :
@@ -505,12 +608,18 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
         std::sort(hits[i].begin(), hits[i].end());
 
+        /*if (i == 6466 || i == 4923 || i == 74242 || i == 5654 || i == 58114 || i == 45102 ||
+            i == 59780 || i == 9227) {
+            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
+        }*/
+
         /*if (isChimericDistance(hits[i], "graphs/c" + std::to_string(i))) {
-            //is_valid_read[i] = false;
+            is_valid_read[i] = false;
             ++dchim;
         }*/
         if (isChimericJumps(hits[i], "graphs/c" + std::to_string(i), i)) {
             is_valid_read[i] = false;
+            // fprintf(stderr, "%u\n", read_lengths[i]);
             ++jchim;
         }
 
@@ -551,7 +660,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         std::vector<uint32_t>().swap(hits[i]);
     }
     std::vector<std::vector<uint32_t>>().swap(hits);
-    fprintf(stderr, "Removed chimeric reads: jumps = %d, distance = %d\n", jchim, dchim);
 
     // reading valid overlaps into memory
     oreader = overlap_type == 0 ?
@@ -616,8 +724,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
     oreader.reset();
 
-    fprintf(stderr, "Valid overlaps after preprocessing = %lu\n", votot);
-
     // check if all non valid overlaps are deleted
     bool shrink = false;
     for (const auto& it: overlaps) {
@@ -631,8 +737,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     if (shrink) {
         shrinkVector(overlaps, 0, is_valid_overlap);
     }
-
-    fprintf(stderr, "Valid overlaps after preprocessing (final) = %lu\n", votot);
 
     auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(reads_path);
     uint64_t vrtot = 0;
@@ -658,9 +762,11 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
     }
     rreader.reset();
-    fprintf(stderr, "Reads size = %zu, overlaps size = %zu\n", reads.size(), overlaps.size());
 
-    fprintf(stderr, "Valid reads after preprocessing = %lu\n", vrtot);
+    fprintf(stderr, "  number of chimeric reads: jumps = %d, distance = %d\n", jchim, dchim);
+    fprintf(stderr, "  number of valid overlaps = %lu (out of %lu)\n", votot, is_valid_overlap.size());
+    fprintf(stderr, "  number of valid reads = %lu (out of %lu)\n", vrtot, is_valid_read.size());
+    fprintf(stderr, "}\n\n");
 }
 
 class Graph::Node {
@@ -668,7 +774,7 @@ class Graph::Node {
         // Node encapsulating read
         Node(uint32_t _id, const std::shared_ptr<Read>& read) :
                 id(_id), read_id(read->id()), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
-                prefix_edges(), suffix_edges(), unitig_size(1), mark(false) {
+                prefix_edges(), suffix_edges(), read_ids(1, read->id()), unitig_size(1), mark(false) {
         }
         // Unitig
         Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges);
@@ -705,6 +811,7 @@ class Graph::Node {
         std::string sequence;
         std::list<Edge*> prefix_edges;
         std::list<Edge*> suffix_edges;
+        std::vector<uint32_t> read_ids;
         uint32_t unitig_size;
         bool mark;
 };
@@ -749,7 +856,7 @@ class Graph::Edge {
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
-        unitig_size(), mark(false) {
+        read_ids(), unitig_size(), mark(false) {
 
     if (!begin_node->prefix_edges.empty()) {
         begin_node->prefix_edges.front()->end_node = this;
@@ -763,6 +870,9 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
         edge->mark = true;
         marked_edges.insert(edge->id);
 
+        read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
+        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(), curr_node->read_ids.end());
+
         unitig_size += curr_node->unitig_size;
         length += edge->length;
         sequence += edge->label();
@@ -773,6 +883,9 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
 
         curr_node = edge->end_node;
     }
+
+    read_ids.reserve(read_ids.size() + end_node->read_ids.size());
+    read_ids.insert(read_ids.end(), end_node->read_ids.begin(), end_node->read_ids.end());
 
     unitig_size += end_node->unitig_size;
     sequence += end_node->sequence;
@@ -790,7 +903,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, std::unordered_set<uint32_t>& marked_edges) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
-        unitig_size(), mark(false) {
+        read_ids(), unitig_size(), mark(false) {
     fprintf(stderr, "!!! CIRCULAR UNITIG ALERT !!!\n");
 
     uint32_t length = 0;
@@ -800,6 +913,9 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, std::unordered_set<uint32_t>& 
         auto* edge = curr_node->suffix_edges.front();
         edge->mark = true;
         marked_edges.insert(edge->id);
+
+        read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
+        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(), curr_node->read_ids.end());
 
         unitig_size += curr_node->unitig_size;
         length += edge->length;
@@ -951,10 +1067,10 @@ void Graph::remove_transitive_edges() {
 
 void Graph::remove_long_edges() {
 
-    uint32_t total = 0;
+    uint32_t num_removed_edges = 0;
 
     for (const auto& node: nodes_) {
-        if (node == nullptr) continue;
+        if (node == nullptr || node->suffix_edges.size() < 2) continue;
 
         for (const auto& edge1: node->suffix_edges) {
             for (const auto& edge2: node->suffix_edges) {
@@ -964,13 +1080,14 @@ void Graph::remove_long_edges() {
                     edge2->pair->mark = true;
                     marked_edges_.insert(edge2->id);
                     marked_edges_.insert(edge2->pair->id);
-                    ++total;
+                    ++num_removed_edges;
                 }
             }
         }
     }
+    // fprintf(stderr, "Number of alignments to be done = %u\n", knots);
 
-    fprintf(stderr, "Total long edges removed = %d\n", total);
+    fprintf(stderr, "Total long edges removed = %d\n", num_removed_edges);
 
     remove_marked_edges();
 }
@@ -1097,7 +1214,7 @@ void Graph::remove_cycles() {
     } while (cycles.size() != 0);
 }
 
-void Graph::remove_bubbles() {
+uint32_t Graph::remove_bubbles() {
 
     std::vector<uint32_t> distance(nodes_.size(), 0);
     std::vector<uint32_t> visited(nodes_.size(), 0);
@@ -1124,6 +1241,12 @@ void Graph::remove_bubbles() {
         }
         if (path.size() + other_path.size() - 4 != node_set.size()) {
             return false;
+        }
+        for (const auto& id: path) {
+            uint32_t pair_id = (id % 2 == 0) ? id + 1 : id - 1;
+            if (node_set.count(pair_id) != 0) {
+                return false;
+            }
         }
         return true;
     };
@@ -1161,7 +1284,7 @@ void Graph::remove_bubbles() {
         return;
     };
 
-    uint32_t bubbles_popped = 0;
+    uint32_t num_bubbles_popped = 0;
 
     std::vector<uint32_t> bubble_candidates;
     locate_bubble_sources(bubble_candidates);
@@ -1242,8 +1365,8 @@ void Graph::remove_bubbles() {
                     other_path_quality);
 
                 // fprintf(stderr, "Path 1 = (%d, %d, %g) | Path 2 = (%d, %d, %g) | Worse path is ",
-                //     path_reads, path_matching_bases, path_quality,
-                //     other_path_reads, other_path_matching_bases, other_path_quality);
+                //      path_reads, path_matching_bases, path_quality,
+                //      other_path_reads, other_path_matching_bases, other_path_quality);
 
                 if (path_reads > other_path_reads || (path_reads == other_path_reads && path_matching_bases > other_path_matching_bases)) {
                     // fprintf(stderr, "2\n");
@@ -1253,7 +1376,7 @@ void Graph::remove_bubbles() {
                     remove_path(path);
                 }
                 remove_marked_edges();
-                ++bubbles_popped;
+                ++num_bubbles_popped;
             }
         }
 
@@ -1267,14 +1390,18 @@ void Graph::remove_bubbles() {
 
     remove_isolated_nodes();
     if (bubble_candidates.size() != 0) fprintf(stderr, "\n");
-    fprintf(stderr, "Popped %d bubbles\n", bubbles_popped);
+    fprintf(stderr, "Popped %d bubbles\n", num_bubbles_popped);
+
+    return num_bubbles_popped;
 }
 
-void Graph::create_unitigs() {
+uint32_t Graph::create_unitigs() {
 
     uint32_t node_id = nodes_.size();
     std::vector<bool> visited(nodes_.size(), false);
     std::vector<std::unique_ptr<Node>> new_nodes;
+
+    uint32_t num_unitigs_created = 0;
 
     for (const auto& node: nodes_) {
         if (node == nullptr || visited[node->id] || node->is_junction()) continue;
@@ -1302,6 +1429,7 @@ void Graph::create_unitigs() {
             if (enode->out_degree() == 0 || enode->suffix_edges.front()->end_node->is_junction()) {
                 break;
             }
+            //++unitig_size;
             enode = enode->suffix_edges.front()->end_node;
             if (enode->id == node->id) {
                 is_circular = true;
@@ -1330,6 +1458,7 @@ void Graph::create_unitigs() {
             new_nodes.push_back(std::unique_ptr<Node>(_unitig));
 
             // fprintf(stderr, "Unitig: %d -> %d && %d -> %d\n", bnode->id, enode->id, enode->pair->id, bnode->pair->id);
+            ++num_unitigs_created;
         }
     }
 
@@ -1337,10 +1466,12 @@ void Graph::create_unitigs() {
         nodes_.push_back(std::move(node));
     }
 
-    fprintf(stderr, "\nUnittiging done!\n");
+    fprintf(stderr, "\nUnittiging done (created %u new unitigs)!\n", num_unitigs_created);
 
     remove_marked_edges();
     remove_isolated_nodes();
+
+    return num_unitigs_created;
 }
 
 void Graph::print_contigs() const {
@@ -1348,6 +1479,7 @@ void Graph::print_contigs() const {
     uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
         if (node == nullptr || node->id % 2 == 0 || node->unitig_size < kMinUnitigSize) continue;
+        fprintf(stderr, "Contig %d, len = %zu: %d - %d\n", contig_id,  node->sequence.size(), node->read_ids.front(), node->read_ids.back());
         fprintf(stdout, ">%d\n%s\n", contig_id++, node->sequence.c_str());
     }
 }
@@ -1451,7 +1583,7 @@ void Graph::print_dot() const {
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
 
-        printf("    %d [label = \"%u [%u] {%d} U:%d\"", node->id, node->id, node->length(), node->read_id, node->unitig_size);
+        printf("    %d [label = \"%u\"", node->id, node->id);
         if (node->id % 2 == 1) {
             printf(", style = filled, fillcolor = brown1]\n");
             printf("    %d -> %d [style = dotted, arrowhead = none]\n", node->id, node->id - 1);
@@ -1462,7 +1594,7 @@ void Graph::print_dot() const {
 
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        printf("    %d -> %d [label = \"%d, %g\"]\n", edge->begin_node->id, edge->end_node->id, edge->length, edge->quality);
+        printf("    %d -> %d\n", edge->begin_node->id, edge->end_node->id);
     }
 
     printf("}\n");
@@ -1477,11 +1609,64 @@ void Graph::print_csv() const {
     }
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        printf("%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,1,%d %g\n",
+        printf("%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,1,%d %d %g\n",
             edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size,
             edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size,
-            edge->length, edge->quality);
+            edge->id, edge->length, edge->quality);
     }
+}
+
+void Graph::remove_selected_nodes_and_edges() {
+
+    for (const auto& node: nodes_) {
+        if (node == nullptr) continue;
+        if (// scerevisiae ont
+            node->read_id == 6466 || node->read_id == 4923 || node->read_id == 74242 ||
+            node->read_id == 5654 || node->read_id == 58114 || node->read_id == 45102 ||
+            node->read_id == 59780 || node->read_id == 9227) {
+
+            // ecoli pacbio
+            //node->read_id == 41549 || node->read_id == 50611 || node->read_id == 62667 ||
+            //node->read_id == 64916 || node->read_id == 65784 || node->read_id == 83480 ||
+            //node->read_id == 85123 || node->read_id == 39991 || node->read_id == 1429) {
+
+            node->mark = true;
+            node->pair->mark = true;
+            for (const auto& edge: node->suffix_edges) {
+                edge->mark = true;
+                edge->pair->mark = true;
+                marked_edges_.insert(edge->id);
+                marked_edges_.insert(edge->pair->id);
+            }
+            for (const auto& edge: node->prefix_edges) {
+                edge->mark = true;
+                edge->pair->mark = true;
+                marked_edges_.insert(edge->id);
+                marked_edges_.insert(edge->pair->id);
+            }
+        }
+    }
+
+    /*for (const auto& edge: edges_) {
+        if (edge == nullptr) continue;
+        if (// scerevisiae ont
+            edge->id == 79150 || edge->id == 62848 || edge->id == 56114 ||
+            edge->id == 44052 || edge->id == 5675 || edge->id == 2616 ||
+            edge->id == 33196 || edge->id == 76055 || edge->id == 13810 ||
+            edge->id == 67515 || edge->id == 44976 || edge->id == 30040 ||
+            edge->id == 50666 || edge->id == 21391 || edge->id == 103954 ||
+            edge->id == 118028 || edge->id == 26160 || edge->id == 30568 ||
+            edge->id == 57100 || edge->id == 40926 || edge->id == 63575 ||
+            edge->id == 47016 || edge->id == 50620 || edge->id == 27678 ||
+            edge->id == 38658 || edge->id == 27431) {
+            edge->mark = true;
+            edge->pair->mark = true;
+            marked_edges_.insert(edge->id);
+            marked_edges_.insert(edge->pair->id);
+        }
+    }*/
+    remove_marked_edges();
+    remove_isolated_nodes();
 }
 
 }

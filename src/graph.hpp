@@ -17,6 +17,11 @@ class ReadFrame;
 class Overlap;
 
 /*
+ * @brief Temporary function for chimeric read detection with reference
+ */
+void findChimeriReads(const std::string& overlaps_path, uint32_t overlap_type);
+
+/*
  * @brief Remove contained reads and their overlaps; Remove unreliable overlaps
  */
 void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid_overlap,
@@ -69,20 +74,32 @@ public:
     /*
      * @brief Removes bubbles (possible information loss and graph fragmentation)
      */
-    void remove_bubbles();
-
-    void print_contigs() const;
-    void create_unitigs();
+    uint32_t remove_bubbles();
 
     /*
-     * @brief Prints graph in graphviz format
+     * @brief Creates unitigs by merging chains of overlapping reads
+     */
+    uint32_t create_unitigs();
+
+    /*
+     * @brief Outputs unitigs in FASTA format
+     */
+    void print_contigs() const;
+
+    /*
+     * @brief Prints assembly graph in graphviz format
      */
     void print_dot() const;
 
     /*
-     * @brief Prints graph in csv format
+     * @brief Prints assembly graph in csv format
      */
     void print_csv() const;
+
+    /*
+     * @brief Temporary
+     */
+    void remove_selected_nodes_and_edges();
 
     friend std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
         const std::vector<std::shared_ptr<Overlap>>& overlaps);
