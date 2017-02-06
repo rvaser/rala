@@ -36,21 +36,26 @@ int main(int argc, char** argv) {
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
 
-    uint32_t r = 0;
     fprintf(stderr, "\n");
-    while (graph->remove_bubbles()) {
-        fprintf(stderr, "Simplification round %d {\n", r);
-        ++r;
-        fprintf(stderr, "}\n\n");
+
+    while (true) {
+        uint32_t num_changes = graph->remove_tips();
+        num_changes += graph->remove_chimeras();
+        num_changes += graph->remove_bubbles();
+        // num_changes += graph->create_unitigs();
+        if (num_changes == 0) {
+            break;
+        }
     }
+
     // graph->remove_selected_nodes_and_edges();
     graph->remove_long_edges();
-    while (graph->create_unitigs()) {
-        fprintf(stderr, "Simplification round %d {\n", r);
-        graph->remove_tips();
-        graph->remove_bubbles();
-        ++r;
-        fprintf(stderr, "}\n\n");
+    while (true) {
+        uint32_t num_changes = graph->create_unitigs();
+        num_changes += graph->remove_tips();
+        if (num_changes == 0) {
+            break;
+        }
     }
     graph->print_contigs();
 

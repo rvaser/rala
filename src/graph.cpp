@@ -417,7 +417,7 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
     rreader.reset();
 
     auto remove_multiple_overlaps = [](std::vector<std::shared_ptr<Overlap>>& overlaps, std::vector<bool>& is_valid_overlap) -> uint32_t {
-        uint32_t num_self_matches = 0;
+        uint32_t num_multiple_matches = 0;
         for (uint32_t i = 0; i < overlaps.size(); ++i) {
             if (is_valid_overlap[overlaps[i]->id()] == false) {
                 continue;
@@ -427,7 +427,7 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
                     overlaps[i]->b_id() != overlaps[j]->b_id()) {
                     continue;
                 }
-                ++num_self_matches;
+                ++num_multiple_matches;
                 if (overlaps[i]->length() > overlaps[j]->length()) {
                     is_valid_overlap[overlaps[i]->id()] = false;
                     break;
@@ -437,7 +437,7 @@ void prefilterData(std::vector<bool>& is_valid_read, std::vector<bool>& is_valid
             }
         }
         overlaps.clear();
-        return num_self_matches;
+        return num_multiple_matches;
     };
 
     auto oreader = overlap_type == 0 ?
@@ -607,11 +607,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
 
         std::sort(hits[i].begin(), hits[i].end());
-
-        /*if (i == 6466 || i == 4923 || i == 74242 || i == 5654 || i == 58114 || i == 45102 ||
-            i == 59780 || i == 9227) {
-            printCoverageGraph(hits[i], "graphs/l" + std::to_string(i));
-        }*/
 
         /*if (isChimericDistance(hits[i], "graphs/c" + std::to_string(i))) {
             is_valid_read[i] = false;
@@ -1092,7 +1087,9 @@ void Graph::remove_long_edges() {
     remove_marked_edges();
 }
 
-void Graph::remove_tips() {
+uint32_t Graph::remove_tips() {
+
+    uint32_t num_tip_links = 0;
 
     for (const auto& node: nodes_) {
         if (node == nullptr) {
@@ -1121,12 +1118,16 @@ void Graph::remove_tips() {
             node->pair->mark = true;
         }
 
+        num_tip_links += num_removed_edges;
+
         remove_marked_edges();
     }
 
-    fprintf(stderr, "\nTip removal is done!\n");
+    fprintf(stderr, "\nTip removal is done (removed %d links)!\n", num_tip_links);
 
     remove_isolated_nodes();
+
+    return num_tip_links;
 }
 
 void Graph::remove_cycles() {
@@ -1214,6 +1215,207 @@ void Graph::remove_cycles() {
     } while (cycles.size() != 0);
 }
 
+uint32_t Graph::remove_chimeras() {
+
+    std::vector<uint32_t> visited(nodes_.size(), 0);
+    uint32_t visited_length = 0;
+    std::vector<int32_t> predecessor(nodes_.size(), -1);
+    std::deque<uint32_t> queue;
+
+    auto extract_path = [&](std::vector<int32_t>& dst, int32_t sink) -> void {
+        int32_t curr_id = sink;
+        while (curr_id != -1) {
+            dst.push_back(curr_id);
+            curr_id = predecessor[curr_id];
+        }
+    };
+
+    auto find_edge = [&](uint32_t src, uint32_t dst) -> int32_t {
+        for (const auto& edge: nodes_[src]->suffix_edges) {
+            if (edge->end_node->id == dst) {
+                return edge->id;
+            }
+        }
+        return -1;
+    };
+
+    auto check_path = [&](std::vector<uint32_t>& dst, const std::vector<int32_t>& path) -> void {
+        // find first node with multiple in edges
+        int32_t pref = -1;
+        for (uint32_t i = 1; i < path.size() - 1; ++i) {
+            if (nodes_[path[i]]->in_degree() > 1) {
+                pref = i;
+                break;
+            }
+        }
+        // find last node with multiple out edges
+        int32_t suff = -1;
+        for (uint32_t i = 1; i < path.size() - 1; ++i) {
+            if (nodes_[path[i]]->out_degree() > 1) {
+                suff = i;
+            }
+        }
+
+        if (pref == -1 && suff == -1) {
+            // remove whole path
+            for (uint32_t i = 0; i < path.size() - 1; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+            return;
+        }
+        if (pref != -1 && nodes_[path[pref]]->out_degree() > 1) return;
+        if (suff != -1 && nodes_[path[suff]]->in_degree() > 1) return;
+
+        if (pref == -1) {
+            // remove everything to after last suff node
+            for (uint32_t i = suff; i < path.size() - 1; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+        } else if (suff == -1) {
+            // remove everything before first pref node
+            for (int32_t i = 0; i < pref; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+        } else if (suff < pref) {
+            // remove everything between last suff and first pref node
+            for (int32_t i = suff; i < pref; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+        } else if (suff >= pref && nodes_[path[0]]->in_degree() == 0) {
+            // remove everything to after last suff node
+            for (uint32_t i = suff; i < path.size() - 1; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+            // remove everything before first pref node
+            for (int32_t i = 0; i < pref; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
+        }
+    };
+
+    uint32_t num_chimeric_links = 0;
+
+    for (const auto& node: nodes_) {
+        if (node == nullptr || node->out_degree() < 2) {
+            continue;
+        }
+
+        bool found_chim_sink = false;
+        int32_t chim_sink = -1, chim_sink_pair = -1;
+        int32_t source = node->id;
+        std::vector<int32_t> chimeric_links;
+
+        // DFS
+        queue.push_front(source);
+        visited[visited_length++] = source;
+        while (queue.size() != 0 && !found_chim_sink) {
+            int32_t v = queue.front();
+            queue.pop_front();
+            const auto& curr_node = nodes_[v];
+
+            for (const auto& edge: curr_node->suffix_edges) {
+                int32_t w = edge->end_node->id;
+                if (predecessor[w] != -1 || w == source) {
+                    // Cycle or bubble
+                    continue;
+                }
+
+                visited[visited_length++] = w;
+                predecessor[w] = v;
+                queue.push_front(w);
+
+                int32_t w_pair = edge->end_node->pair->id;
+                if (predecessor[w_pair] != -1) {
+                    // Chimeric link!
+                    chim_sink = w;
+                    chim_sink_pair = w_pair;
+                    found_chim_sink = true;
+                    break;
+                }
+
+                /*int32_t w_pair = edge->end_node->pair->id;
+                if (predecessor[w_pair] != -1) {
+                    sink = w;
+                    sink_pair = w_pair;
+                    found_sink = true;
+                    break;
+                }*/
+            }
+        }
+
+        if (found_chim_sink) {
+            // fprintf(stderr, "Source = %d, %d, %d\n", source, chim_sink, chim_sink_pair);
+
+            std::vector<int32_t> path;
+            extract_path(path, chim_sink);
+            if (path.back() != chim_sink_pair) {
+                std::vector<int32_t> other_path;
+                extract_path(other_path, chim_sink_pair);
+
+                int32_t ancestor_i = -1, ancestor_j = -1;
+                for (uint32_t i = 0; i < path.size(); ++i) {
+                    for (uint32_t j = 0; j < other_path.size(); ++j) {
+                        if (path[i] == other_path[j]) {
+                            ancestor_i = i;
+                            ancestor_j = j;
+                            break;
+                        }
+                    }
+                    if (ancestor_i != -1) {
+                        break;
+                    }
+                }
+                if (ancestor_i != -1) path.resize(ancestor_i + 1);
+                std::reverse(path.begin(), path.end());
+                if (ancestor_j != -1) other_path.resize(ancestor_j + 1);
+
+                for (uint32_t j = 1; j < other_path.size(); ++j) {
+                    path.push_back(nodes_[other_path[j]]->pair->id);
+                }
+            } else {
+                std::reverse(path.begin(), path.end());
+            }
+
+            // check simple chimeric patterns
+            std::vector<uint32_t> chimeric_links;
+            // check_path_simple(chimeric_links, path);
+            // if (chimeric_links.size() == 0) {
+                // check for other patterns
+                check_path(chimeric_links, path);
+            // }
+
+            if (chimeric_links.size() > 0) {
+                // remove chimeric links
+                for (const auto& pid: path) fprintf(stderr, "%d -> ", pid);
+                fprintf(stderr, "\n");
+                for (const auto& edge_id: chimeric_links) {
+                    fprintf(stderr, "%d\n", edge_id);
+                    fprintf(stderr, "Removing: %d -> %d\n", edges_[edge_id]->begin_node->id, edges_[edge_id]->end_node->id);
+                    edges_[edge_id]->mark = true;
+                    edges_[edge_id]->pair->mark = true;
+                    marked_edges_.insert(edge_id);
+                    marked_edges_.insert(edges_[edge_id]->pair->id);
+                }
+                ++num_chimeric_links;
+                remove_marked_edges();
+            } else {
+                // for (const auto& pid: path) fprintf(stderr, "%d -> ", pid);
+                // fprintf(stderr, "\n");
+            }
+        }
+
+        queue.clear();
+        for (uint32_t i = 0; i < visited_length; ++i) {
+            predecessor[visited[i]] = -1;
+        }
+        visited_length = 0;
+    }
+
+    fprintf(stderr, "Removed %u chimeric links\n", num_chimeric_links);
+
+    return num_chimeric_links;
+}
+
 uint32_t Graph::remove_bubbles() {
 
     std::vector<uint32_t> distance(nodes_.size(), 0);
@@ -1234,12 +1436,9 @@ uint32_t Graph::remove_bubbles() {
 
     auto is_valid_bubble = [](const std::vector<uint32_t>& path, const std::vector<uint32_t>& other_path) -> bool {
         std::set<uint32_t> node_set;
-        for (uint32_t i = 1; i < path.size() - 1; ++i) node_set.insert(path[i]);
-        for (uint32_t i = 1; i < other_path.size() - 1; ++i) node_set.insert(other_path[i]);
-        if (node_set.count(path[0]) != 0 || node_set.count(path[path.size()-1]) != 0) {
-            return false;
-        }
-        if (path.size() + other_path.size() - 4 != node_set.size()) {
+        for (const auto& id: path) node_set.insert(id);
+        for (const auto& id: other_path) node_set.insert(id);
+        if (path.size() + other_path.size() - 2 != node_set.size()) {
             return false;
         }
         for (const auto& id: path) {
@@ -1344,13 +1543,13 @@ uint32_t Graph::remove_bubbles() {
             other_path.push_back(sink);
             extract_path(other_path, source, sink_other_predecesor);
 
-            // fprintf(stderr, "Path 1:");
-            // for (const auto& it: path) fprintf(stderr, " %d", it);
-            // fprintf(stderr, "\n");
+            /*fprintf(stderr, "Path 1:");
+            for (const auto& it: path) fprintf(stderr, " %d", it);
+            fprintf(stderr, "\n");
 
-            // fprintf(stderr, "Path 2:");
-            // for (const auto& it: other_path) fprintf(stderr, " %d", it);
-            // fprintf(stderr, "\n");
+            fprintf(stderr, "Path 2:");
+            for (const auto& it: other_path) fprintf(stderr, " %d", it);
+            fprintf(stderr, "\n");*/
 
             if (!is_valid_bubble(path, other_path)) {
                 // fprintf(stderr, "Not valid bubble!\n");
@@ -1618,6 +1817,7 @@ void Graph::print_csv() const {
 
 void Graph::remove_selected_nodes_and_edges() {
 
+    uint32_t num_chimeras = 0;
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
         if (// scerevisiae ont
@@ -1644,10 +1844,14 @@ void Graph::remove_selected_nodes_and_edges() {
                 marked_edges_.insert(edge->id);
                 marked_edges_.insert(edge->pair->id);
             }
+
+            ++num_chimeras;
         }
     }
 
-    /*for (const auto& edge: edges_) {
+    fprintf(stderr, "Num selected nodes = %u\n", num_chimeras);
+
+    for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
         if (// scerevisiae ont
             edge->id == 79150 || edge->id == 62848 || edge->id == 56114 ||
@@ -1664,7 +1868,7 @@ void Graph::remove_selected_nodes_and_edges() {
             marked_edges_.insert(edge->id);
             marked_edges_.insert(edge->pair->id);
         }
-    }*/
+    }
     remove_marked_edges();
     remove_isolated_nodes();
 }

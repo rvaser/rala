@@ -61,15 +61,20 @@ public:
     void remove_long_edges();
 
     /*
-     * @brief Removes tips (i.e. nodes with in_degree == 0 || out_degree == 0)
+     * @brief Removes nodes which are dead ends in graph
      */
-    void remove_tips();
+    uint32_t remove_tips();
 
     /*
      * @brief Removes cycles (possible information loss)
      * (Tarjan 1972)
      */
     void remove_cycles();
+
+    /*
+     * @brief Removes chimeric reads based on several graph patterns
+     */
+    uint32_t remove_chimeras();
 
     /*
      * @brief Removes bubbles (possible information loss and graph fragmentation)
