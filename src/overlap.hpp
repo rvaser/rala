@@ -39,8 +39,16 @@ class Overlap {
             return a_begin_;
         }
 
+        void set_a_begin(uint32_t a_begin) {
+            a_begin_ = a_begin;
+        }
+
         uint32_t a_end() const {
             return a_end_;
+        }
+
+        void set_a_end(uint32_t a_end) {
+            a_end_ = a_end;
         }
 
         uint32_t a_length() const {
@@ -59,8 +67,16 @@ class Overlap {
             return b_begin_;
         }
 
+        void set_b_begin(uint32_t b_begin) {
+            b_begin_ = b_begin;
+        }
+
         uint32_t b_end() const {
             return b_end_;
+        }
+
+        void set_b_end(uint32_t b_end) {
+            b_end_ = b_end;
         }
 
         uint32_t b_length() const {

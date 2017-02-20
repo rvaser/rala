@@ -18,16 +18,12 @@ int main(int argc, char** argv) {
     std::string overlaps_path = argv[2];
     uint32_t overlap_type = atoi(argv[3]);
 
-    // findChimeriReads(overlaps_path, overlap_type);
+    // findChimericReads(reads_path, overlaps_path, overlap_type);
     // return 0;
-
-    std::vector<bool> is_valid_read, is_valid_overlap;
-    prefilterData(is_valid_read, is_valid_overlap, reads_path, overlaps_path, overlap_type);
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    preprocessData(reads, overlaps, is_valid_read, is_valid_overlap, reads_path,
-        overlaps_path, overlap_type);
+    preprocessData(reads, overlaps, reads_path, overlaps_path, overlap_type);
 
     auto graph = createGraph(reads, overlaps);
     overlaps.clear();
@@ -36,13 +32,11 @@ int main(int argc, char** argv) {
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
 
-    fprintf(stderr, "\n");
-
     while (true) {
         uint32_t num_changes = graph->remove_tips();
         num_changes += graph->remove_chimeras();
         num_changes += graph->remove_bubbles();
-        // num_changes += graph->create_unitigs();
+        num_changes += graph->create_unitigs();
         if (num_changes == 0) {
             break;
         }
@@ -58,9 +52,7 @@ int main(int argc, char** argv) {
         }
     }
     graph->print_contigs();
-
-    // graph->print_dot();
-    // graph->print_csv();
+    // graph->print_csv("layout_graph.csv");
 
     return 0;
 }
