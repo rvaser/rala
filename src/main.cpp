@@ -8,48 +8,61 @@
 #include "overlap.hpp"
 #include "graph.hpp"
 #include "read.hpp"
+#include "utils.hpp"
 #include "bioparser/src/bioparser.hpp"
 
-using namespace RALA;
+using namespace rala;
 
 int main(int argc, char** argv) {
 
-    std::vector<std::shared_ptr<Overlap>> overlaps;
-    auto oreader = BIOPARSER::createReader<Overlap, BIOPARSER::MhapReader>(argv[1]);
-    oreader->read_objects(overlaps, 1000000000);
+    std::string reads_path = argv[2];
+    std::string overlaps_path = argv[3];
+    uint32_t overlap_type = atoi(argv[4]);
+
+    switch (atoi(argv[1])) {
+        case 1:
+            findChimericReads(reads_path, overlaps_path, overlap_type);
+            return 0;
+        case 2:
+            findUnusedOverlaps(reads_path, overlaps_path, overlap_type);
+            return 0;
+        case 0:
+        default:
+            break;
+    }
 
     std::vector<std::shared_ptr<Read>> reads;
-    auto rreader = BIOPARSER::createReader<Read, BIOPARSER::FastqReader>(argv[2]);
-    rreader->read_objects(reads, 1000000000);
-
-    preprocessData(reads, overlaps);
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    preprocessData(reads, overlaps, reads_path, overlaps_path, overlap_type);
 
     auto graph = createGraph(reads, overlaps);
-    for (auto& read: reads) {
-        if (read != nullptr) read.reset();
-    }
-    for (auto& overlap: overlaps) {
-        if (overlap != nullptr) overlap.reset();
-    }
+    overlaps.clear();
+    reads.clear();
 
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
-    graph->create_unitigs();
-    //graph->remove_long_edges();
-    uint32_t r = 0;
-    while (r < 10) {
-        //graph->create_unitigs();
-        graph->remove_tips();
-        graph->remove_bubbles();
-        ++r;
-    }
-    graph->create_unitigs();
-    graph->remove_tips();
-    graph->create_unitigs();
-    graph->print_contigs();
 
-    //graph->print_dot();
-    //graph->print_csv();
+    while (true) {
+        uint32_t num_changes = graph->remove_tips();
+        num_changes += graph->remove_chimeras();
+        num_changes += graph->remove_bubbles();
+        num_changes += graph->create_unitigs();
+        if (num_changes == 0) {
+            break;
+        }
+    }
+
+    // graph->remove_selected_nodes_and_edges();
+    graph->remove_long_edges();
+    while (true) {
+        uint32_t num_changes = graph->create_unitigs();
+        num_changes += graph->remove_tips();
+        if (num_changes == 0) {
+            break;
+        }
+    }
+    graph->print_contigs();
+    // graph->print_csv("layout_graph.csv");
 
     return 0;
 }

@@ -1,28 +1,30 @@
 /*!
- * @file Graph.hpp
+ * @file graph.hpp
  *
  * @brief Graph class header file
  */
 
 #pragma once
 
+#include <stdint.h>
 #include <memory>
 #include <vector>
+#include <unordered_set>
 
-namespace RALA {
+namespace rala {
 
 class Read;
+class ReadFrame;
 class Overlap;
-/*
- * @brief Trims reads from both sides based on read to read overlaps (taken from Miniasm);
- * Removes chimeric reads (taken from Miniasm)
- * (Li 2016)
- */
-void preprocessData(std::vector<std::shared_ptr<Read>>& reads,
-    std::vector<std::shared_ptr<Overlap>>& overlaps);
 
-void calculateReadCoverages(std::vector<std::shared_ptr<Read>>& reads,
-    const std::vector<std::shared_ptr<Overlap>>& overlaps);
+/*
+ * @brief Remove contained reads and their overlaps; Remove unreliable overlaps;
+ *   If prefilter is true, trim reads from both sides based on read to read overlaps (Li 2016)
+ *   and find chimeric reads
+ */
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
+    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
+    bool prefilter = true);
 
 class Graph;
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
@@ -51,9 +53,9 @@ public:
     void remove_long_edges();
 
     /*
-     * @brief Removes tips (i.e. nodes with in_degree == 0 || out_degree == 0)
+     * @brief Removes nodes which are dead ends in graph
      */
-    void remove_tips();
+    uint32_t remove_tips();
 
     /*
      * @brief Removes cycles (possible information loss)
@@ -62,22 +64,34 @@ public:
     void remove_cycles();
 
     /*
+     * @brief Removes chimeric reads based on several graph patterns
+     */
+    uint32_t remove_chimeras();
+
+    /*
      * @brief Removes bubbles (possible information loss and graph fragmentation)
      */
-    void remove_bubbles();
+    uint32_t remove_bubbles();
 
+    /*
+     * @brief Creates unitigs by merging chains of overlapping reads
+     */
+    uint32_t create_unitigs();
+
+    /*
+     * @brief Outputs unitigs in FASTA format
+     */
     void print_contigs() const;
-    void create_unitigs();
 
     /*
-     * @brief Prints graph in graphviz format
+     * @brief Prints assembly graph in csv format
      */
-    void print_dot() const;
+    void print_csv(std::string path) const;
 
     /*
-     * @brief Prints graph in csv format
+     * @brief Temporary
      */
-    void print_csv() const;
+    void remove_selected_nodes_and_edges();
 
     friend std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
         const std::vector<std::shared_ptr<Overlap>>& overlaps);
@@ -96,8 +110,9 @@ private:
     class Node;
     class Edge;
 
-    std::vector<std::unique_ptr<Node>> nodes_;
-    std::vector<std::unique_ptr<Edge>> edges_;
+    std::vector<std::shared_ptr<Node>> nodes_;
+    std::vector<std::shared_ptr<Edge>> edges_;
+    std::unordered_set<uint32_t> marked_edges_;
 };
 
 }

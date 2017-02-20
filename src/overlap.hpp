@@ -11,7 +11,7 @@
 
 #include "bioparser/src/bioparser.hpp"
 
-namespace RALA {
+namespace rala {
 
 class Overlap;
 std::unique_ptr<Overlap> createOverlap(uint64_t id, uint32_t a_id, uint32_t b_id,
@@ -39,8 +39,16 @@ class Overlap {
             return a_begin_;
         }
 
+        void set_a_begin(uint32_t a_begin) {
+            a_begin_ = a_begin;
+        }
+
         uint32_t a_end() const {
             return a_end_;
+        }
+
+        void set_a_end(uint32_t a_end) {
+            a_end_ = a_end;
         }
 
         uint32_t a_length() const {
@@ -59,8 +67,16 @@ class Overlap {
             return b_begin_;
         }
 
+        void set_b_begin(uint32_t b_begin) {
+            b_begin_ = b_begin;
+        }
+
         uint32_t b_end() const {
             return b_end_;
+        }
+
+        void set_b_end(uint32_t b_end) {
+            b_end_ = b_end;
         }
 
         uint32_t b_length() const {
@@ -94,12 +110,18 @@ class Overlap {
             double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
             uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
 
-        friend BIOPARSER::MhapReader<Overlap>;
+        friend bioparser::MhapReader<Overlap>;
+        friend bioparser::PafReader<Overlap>;
 
     private:
         Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
             uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
             uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
+        Overlap(uint64_t id, const char* a_name, uint32_t a_name_length, uint32_t a_length,
+            uint32_t a_begin, uint32_t a_end, char orientation, const char* b_name,
+            uint32_t b_name_length, uint32_t b_length, uint32_t b_begin, uint32_t b_end,
+            uint32_t matching_bases, uint32_t overlap_length, uint32_t quality);
+
         Overlap(const Overlap&) = delete;
         const Overlap& operator=(const Overlap&) = delete;
 

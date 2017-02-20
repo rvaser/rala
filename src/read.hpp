@@ -12,7 +12,7 @@
 
 #include "bioparser/src/bioparser.hpp"
 
-namespace RALA {
+namespace rala {
 
 class Read;
 std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
@@ -50,9 +50,12 @@ class Read {
             uint32_t name_length, const char* sequence, uint32_t sequence_length,
             const char* quality, uint32_t quality_length);
 
-        friend BIOPARSER::FastqReader<Read>;
+        friend bioparser::FastaReader<Read>;
+        friend bioparser::FastqReader<Read>;
 
     private:
+        Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
+            uint32_t sequence_length);
         Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
             uint32_t sequence_length, const char* quality, uint32_t quality_length);
         Read(const Read&) = delete;
