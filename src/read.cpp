@@ -8,7 +8,7 @@
 
 #include "read.hpp"
 
-namespace RALA {
+namespace rala {
 
 std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
     const char* sequence, uint32_t sequence_length, const char* quality,

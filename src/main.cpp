@@ -8,18 +8,28 @@
 #include "overlap.hpp"
 #include "graph.hpp"
 #include "read.hpp"
+#include "utils.hpp"
 #include "bioparser/src/bioparser.hpp"
 
-using namespace RALA;
+using namespace rala;
 
 int main(int argc, char** argv) {
 
-    std::string reads_path = argv[1];
-    std::string overlaps_path = argv[2];
-    uint32_t overlap_type = atoi(argv[3]);
+    std::string reads_path = argv[2];
+    std::string overlaps_path = argv[3];
+    uint32_t overlap_type = atoi(argv[4]);
 
-    // findChimericReads(reads_path, overlaps_path, overlap_type);
-    // return 0;
+    switch (atoi(argv[1])) {
+        case 1:
+            findChimericReads(reads_path, overlaps_path, overlap_type);
+            return 0;
+        case 2:
+            findUnusedOverlaps(reads_path, overlaps_path, overlap_type);
+            return 0;
+        case 0:
+        default:
+            break;
+    }
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;

@@ -1,25 +1,21 @@
 /*!
- * @file Graph.hpp
+ * @file graph.hpp
  *
  * @brief Graph class header file
  */
 
 #pragma once
 
+#include <stdint.h>
 #include <memory>
 #include <vector>
 #include <unordered_set>
 
-namespace RALA {
+namespace rala {
 
 class Read;
 class ReadFrame;
 class Overlap;
-
-/*
- * @brief Temporary function for chimeric read detection with reference
- */
-void findChimericReads(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type);
 
 /*
  * @brief Remove contained reads and their overlaps; Remove unreliable overlaps;

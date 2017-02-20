@@ -11,7 +11,7 @@
 
 #include "bioparser/src/bioparser.hpp"
 
-namespace RALA {
+namespace rala {
 
 class Overlap;
 std::unique_ptr<Overlap> createOverlap(uint64_t id, uint32_t a_id, uint32_t b_id,
@@ -110,8 +110,8 @@ class Overlap {
             double error, uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
             uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
 
-        friend BIOPARSER::MhapReader<Overlap>;
-        friend BIOPARSER::PafReader<Overlap>;
+        friend bioparser::MhapReader<Overlap>;
+        friend bioparser::PafReader<Overlap>;
 
     private:
         Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error, uint32_t minmers,
