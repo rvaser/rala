@@ -21,8 +21,6 @@
 
 namespace rala {
 
-constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
-
 constexpr uint32_t kMinOverlapLength = 2000;
 constexpr uint32_t kMinMatchingBases = 100;
 constexpr double kMinMatchingBasesPerc = 0.055;
@@ -114,7 +112,7 @@ void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& pa
 }
 
 bool slopeRead(std::pair<uint32_t, uint32_t>& slope_region, const std::vector<uint32_t>& hits,
-    const std::string& path) {
+    const std::string& path, bool print = false) {
 
     bool is_slope_read = false;
     slope_region.first = -1;
@@ -186,19 +184,36 @@ bool slopeRead(std::pair<uint32_t, uint32_t>& slope_region, const std::vector<ui
         }
     }
 
-    /* if (is_slope_read) {
+    if (print && is_slope_read) {
         std::ofstream out(path);
+        std::vector<int32_t> slopes(coverage_graph.size(), 0);
+        slopes[slope_region.first] = 1;
+        slopes[slope_region.second] = 2;
         for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-            out << i << " " << coverage_graph[i] << std::endl;
+            out << i << " " << coverage_graph[i] << " " <<  slopes[i] << std::endl;
         }
         out.close();
-        fprintf(stderr, "%d (k = %d): %d - %d\n", id, k, chimeric_region.first, chimeric_region.second);
-    } */
+        fprintf(stderr, "%s (k = %d): %d - %d\n", path.c_str(), k, slope_region.first, slope_region.second);
+    }
 
     return is_slope_read;
 }
 
-void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, uint32_t id) {
+void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool print = false) {
+
+    std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
+    int32_t coverage = 0;
+    uint32_t last = 0;
+    for (const auto& hit: hits) {
+        if (coverage > 0) {
+            for (uint32_t i = last; i < (hit >> 1); ++i) {
+                coverage_graph[i] += coverage;
+            }
+        }
+        last = hit >> 1;
+        if (hit & 1) --coverage;
+        else ++coverage;
+    }
 
     auto window_add = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t value, int32_t position) -> void {
         while (!window.empty() && window.back().second <= value) {
@@ -215,33 +230,17 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, uint
         return;
     };
 
-    std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
-    int32_t coverage = 0;
-    uint32_t last = 0;
-    for (const auto& hit: hits) {
-        if (coverage > 0) {
-            for (uint32_t i = last; i < (hit >> 1); ++i) {
-                coverage_graph[i] += coverage;
-            }
-        }
-        last = hit >> 1;
-        if (hit & 1) --coverage;
-        else ++coverage;
-    }
-
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
 
-    int32_t k = std::max(500U, uint32_t(0.05 * ((hits.back()>>1) - (hits.front()>>1))));
+    int32_t k = std::max(500U, uint32_t(0.042 * ((hits.back()>>1) - (hits.front()>>1))));
     int32_t read_length = coverage_graph.size();
-    // int32_t left_margin = (hits.front() >> 1) + ((hits.back()>>1) - (hits.front()>>1)) * 0.03;
-    // int32_t right_margin = (hits.front() >> 1) + ((hits.back()>>1) - (hits.front()>>1)) * 0.97;
 
-    bool save_downslope = true;
-    bool save_upslope = false;
-    uint32_t upslope = 0;
+    // bool save_downslope = true;
+    // bool save_upslope = false;
+    // uint32_t upslope = 0;
 
-    for (int32_t i = -1 * k + 2; i < read_length - 1; ++i) {
+    for (int32_t i = -1 * k + 2; i < read_length; ++i) {
         if (i < read_length - k) {
             window_add(right_window, k, coverage_graph[i + k], i + k);
         }
@@ -251,12 +250,14 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, uint
             window_add(left_window, k, coverage_graph[i - 1], i - 1);
             window_update(left_window, k, i - 1);
 
-            // if (i < left_margin || i > right_margin) {
-            //     continue;
-            // }
-
-            int32_t current = coverage_graph[i] * 1.6; // kChimericRatio;
+            int32_t current = coverage_graph[i] * 1.42;
             if (left_window.front().second > current) {
+                slopes.push_back(i << 1 | 0);
+            }
+            if (!right_window.empty() && right_window.front().second > current) {
+                slopes.push_back(i << 1 | 1);
+            }
+            /*if (left_window.front().second > current) {
                 if (save_downslope) {
                     slopes.push_back(i << 1 | 0);
                     save_downslope = false;
@@ -264,7 +265,7 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, uint
             } else {
                 save_downslope = true;
             }
-            if (right_window.front().second > current) {
+            if (!right_window.empty() && right_window.front().second > current) {
                 save_upslope = true;
                 upslope = i << 1 | 1;
             } else {
@@ -272,29 +273,160 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, uint
                     slopes.push_back(upslope);
                     save_upslope = false;
                 }
+            }*/
+        }
+    }
+
+    int32_t max_width = ((hits.back()>>1) - (hits.front()>>1)) * 0.84;
+
+    if (print && slopes.size() > 2) {
+
+        fprintf(stderr, "%s\n", path.c_str());
+        uint32_t downslope = 0, fdownslope = 0;
+        bool found = false;
+
+        uint32_t upslope = slopes[0] >> 1, lupslope = 0;
+
+        std::vector<std::pair<uint32_t, uint32_t>> slope_regions;
+
+        for (uint32_t s = 1; s < slopes.size(); ++s) {
+            // slope_graph[slopes[s] >> 1] = slopes[s] & 1 ? 2 : 1;
+
+            if (slopes[s] & 1) {
+                if ((slopes[s] >> 1) - upslope > 2 * k) {
+                    slope_regions.emplace_back(upslope << 1 | 1, lupslope);
+                    upslope = slopes[s] >> 1;
+                    lupslope = upslope;
+                } else {
+                    lupslope = slopes[s] >> 1;
+                }
+            } else if (found) {
+                if ((slopes[s] >> 1) - fdownslope > 2 * k) {
+                    slope_regions.emplace_back(fdownslope << 1 | 0, downslope);
+                    fdownslope = slopes[s] >> 1;
+                    downslope = fdownslope;
+                } else {
+                    downslope = slopes[s] >> 1;
+                }
+            } else {
+                found = true;
+                fdownslope = slopes[s] >> 1;
+                downslope = fdownslope;
             }
         }
-    }
 
-    if (slopes.size() > 2) {
-        std::sort(slopes.begin(), slopes.end());
-        std::ofstream out(path);
-        for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-            out << i << " " << coverage_graph[i] << std::endl;
+        slope_regions.emplace_back(upslope << 1 | 1, lupslope);
+        slope_regions.emplace_back(fdownslope << 1 | 0, downslope);
+        std::sort(slope_regions.begin(), slope_regions.end());
+
+        for (const auto& it: slope_regions) {
+            fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
         }
-        out.close();
-        fprintf(stderr, "%d: ", id);
-        for (const auto& it: slopes) fprintf(stderr, " (%d %s)", it>>1, it & 1 ? "^" : ".");
-        fprintf(stderr, "\n");
-    }
 
+        // trim regions
+        auto trim_left = [&](uint32_t begin, uint32_t end) -> uint32_t {
+            uint32_t value = coverage_graph[begin];
+            while (begin <= end && coverage_graph[begin] == value) {
+                ++begin;
+            }
+            return begin - 1;
+        };
+
+        auto trim_right = [&](uint32_t begin, uint32_t end) -> uint32_t {
+            uint32_t value = coverage_graph[end];
+            while (end >= begin && coverage_graph[end] == value) {
+                --end;
+            }
+            return end + 1;
+        };
+
+        for (auto& region: slope_regions) {
+            if (region.first & 1) { // up slope
+                region.first = (trim_left(region.first >> 1, region.second) << 1) | 1;
+                region.second = trim_right(region.first >> 1, region.second);
+            } else { // downslope
+                region.second = trim_right(region.first >> 1, region.second);
+                region.first = (trim_left(region.first >> 1, region.second) << 1) | 0;
+            }
+        }
+        fprintf(stderr, "TRIMMED\n");
+        for (const auto& it: slope_regions) {
+            fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
+        }
+
+        // hill check
+        for (uint32_t s = 0; s < slope_regions.size() - 1; ++s) {
+            if (slope_regions[s].second > (slope_regions[s + 1].first >> 1)) {
+                uint32_t begin = std::max(slope_regions[s].first >> 1, slope_regions[s + 1].first >> 1);
+                uint32_t end = std::min(slope_regions[s].second, slope_regions[s + 1].second);
+                uint32_t min_left_id = begin, min_right_id = begin;
+                for (uint32_t ss = begin + 1; ss < end; ++ss) {
+                    if (coverage_graph[ss] < coverage_graph[min_left_id]) {
+                        min_left_id = ss;
+                    }
+                    if (coverage_graph[ss] <= coverage_graph[min_right_id]) {
+                        min_right_id = ss;
+                    }
+                }
+                ++min_left_id;
+                --min_right_id;
+
+                slope_regions[s].first = min_left_id << 1 | 0;
+                slope_regions[s].second = min_left_id;
+                slope_regions[s + 1].first = min_right_id << 1 | 1;
+                slope_regions[s + 1].second = min_right_id;
+            }
+        }
+        fprintf(stderr, "Chimeric check\n");
+
+        std::vector<uint32_t> slope_graph(coverage_graph.size(), 0);
+        for (const auto& it: slope_regions) {
+            fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
+            // slope_graph[it.first >> 1] = 3;
+            // slope_graph[it.second] = 3;
+        }
+        fprintf(stderr, "\n");
+
+        slopes.clear();
+        for (const auto& region: slope_regions) {
+            if ((region.first >> 1) < (hits.front() >> 1)) {
+                slopes.push_back((((region.first >> 1) + region.second) / 2 + 1) << 1 | (region.first & 1));
+            } else if (region.second >= (hits.back() >> 1)) {
+                slopes.push_back((((region.first >> 1) + region.second) / 2 - 1) << 1 | (region.first & 1));
+            } else if (region.first & 1) { // upslope
+                slopes.push_back(region.first);
+            } else { // downslope
+                slopes.push_back(region.second << 1 | 0);
+            }
+            // slope_graph[slopes.back() >> 1] = slopes.back() & 1 ? 2 : 1;
+        }
+
+        // find hills
+        bool has_hill = false;
+        for (uint32_t s = 0; s < slopes.size() - 1; ++s) {
+            if ((slopes[s] & 1) && !(slopes[s + 1] & 1)) {
+                if ((slopes[s + 1] >> 1) - (slopes[s] >> 1) < max_width) {
+                    slope_graph[(slopes[s] >> 1)] = 2;
+                    slope_graph[(slopes[s + 1] >> 1)] = 1;
+                    has_hill = true;
+                }
+            }
+        }
+
+        if (has_hill) {
+            std::ofstream out(path);
+            for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+                out << i << " " << coverage_graph[i] << " " << slope_graph[i] << std::endl;
+            }
+            out.close();
+        }
+    }
 }
 
 // call before hit sorting!!
 void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) {
 
     std::ofstream out(path);
-    // out.open(path);
     for (uint32_t i = 0; i < hits.size(); i+= 2) {
         out << (hits[i] >> 1) << " " << (hits[i+1] >> 1) << std::endl;
     }
@@ -354,10 +486,11 @@ void prefilterData(std::vector<std::pair<uint32_t, uint32_t>>& regions,
             continue;
         }
 
+        // if (i == 1871) printPileGraph(hits[i], "graphs/" + std::to_string(i));
         std::sort(hits[i].begin(), hits[i].end());
         // printCoverageGraph(hits[i], "graphs/r" + std::to_string(i));
 
-        // findSlopes(hits[i], "graphs/c" + std::to_string(i), i);
+        findSlopes(hits[i], "graphs/l" + std::to_string(i), true);
         if (slopeRead(slope_regions[i], hits[i], "graphs/c" + std::to_string(i))) {
             ++num_slope_reads;
         }
@@ -451,12 +584,20 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
         bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
 
+    uint64_t len = 0, sim = 0, mb = 0, ovh = 0;
+
     while (true) {
 
         auto status = oreader->read_objects(overlaps, kChunkSize);
         is_valid_overlap.resize(is_valid_overlap.size() + overlaps.size(), true);
 
         for (const auto& it: overlaps) {
+
+            len += std::min(it->a_end() - it->a_begin(), it->b_end() - it->b_begin());
+            sim += it->quality() * 100;
+            mb += it->matching_bases();
+            ovh += std::min(std::min(it->a_begin(), it->b_begin()),
+                std::min(it->a_length() - it->a_end(), it->b_length() - it->b_end()));
 
             max_read_id = std::max(max_read_id, std::max(it->a_id(), it->b_id()));
 
@@ -492,6 +633,14 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
     }
     oreader.reset();
+
+    fprintf(stderr, "Average len, sim, mb, ovh = %lf, %lf, %lf, %lf\n",
+        len / (double) is_valid_overlap.size(),
+        sim / (double) is_valid_overlap.size(),
+        mb / (double) is_valid_overlap.size(),
+        ovh / (double) is_valid_overlap.size());
+    len = 0; sim = 0; mb = 0; ovh = 0;
+    uint64_t num_valid = 0;
 
     is_valid_read.resize(max_read_id + 1, true);
 
@@ -553,6 +702,15 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                     regions[it->b_id()].second
                 );
 
+                if (is_valid) {
+                    ++num_valid;
+                    len += std::min(it->a_end() - it->a_begin(), it->b_end() - it->b_begin());
+                    sim += it->quality() * 100;
+                    mb += it->matching_bases();
+                    ovh += std::min(std::min(it->a_begin(), it->b_begin()),
+                        std::min(it->a_length() - it->a_end(), it->b_length() - it->b_end()));
+                }
+
                 if (!is_valid ||
                     it->a_end() - it->a_begin() < kMinOverlapLength ||
                     it->b_end() - it->b_begin() < kMinOverlapLength ||
@@ -589,6 +747,10 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
     }
     oreader.reset();
+
+    fprintf(stderr, "Average len, sim, mb, ovh = %lf, %lf, %lf, %lf\n",
+        len / (double) num_valid, sim / (double) num_valid,
+        mb / (double) num_valid, ovh / (double) num_valid);
 
     // check if all non valid overlaps are deleted
     bool shrink = false;
@@ -646,6 +808,12 @@ class Graph::Node {
         Node(uint32_t _id, const std::shared_ptr<Read>& read) :
                 id(_id), read_id(read->id()), pair(), sequence(id % 2 == 0 ? read->sequence() : read->rc()),
                 prefix_edges(), suffix_edges(), read_ids(1, read->id()), unitig_size(1), mark(false) {
+
+            auto is_unitig = read->name().find("Utg=");
+            if (is_unitig != std::string::npos) {
+                unitig_size = atoi(read->name().c_str() + is_unitig + 4);
+                // fprintf(stderr, "Unitig size = %u\n", unitig_size);
+            }
         }
         // Unitig
         Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges);
@@ -1570,7 +1738,7 @@ void Graph::print_contigs() const {
         fprintf(stderr, "    >Contig_%d_(Utg:%u), length = %zu (%d -> %d)\n", contig_id,
             node->unitig_size, node->sequence.size(), node->read_ids.front(),
             node->read_ids.back());
-        fprintf(stdout, ">Contig_%u_(Utg:%u)\n%s\n", contig_id++, node->unitig_size, node->sequence.c_str());
+        fprintf(stdout, ">Contig_%u_(Utg=%u:Len=%lu)\n%s\n", contig_id++, node->unitig_size, node->sequence.size(), node->sequence.c_str());
     }
 
     fprintf(stderr, "  }\n");
