@@ -15,16 +15,19 @@ using namespace rala;
 
 int main(int argc, char** argv) {
 
-    std::string reads_path = argv[2];
-    std::string overlaps_path = argv[3];
-    uint32_t overlap_type = atoi(argv[4]);
+    std::string reads_path = argc > 2 ? argv[2] : "";
+    std::string overlaps_path = argc > 3 ? argv[3] : "";
+    uint32_t overlap_type = argc > 4 ? atoi(argv[4]) : 0;
 
     switch (atoi(argv[1])) {
         case 1:
             findChimericReads(reads_path, overlaps_path, overlap_type);
             return 0;
         case 2:
-            findUnusedOverlaps(reads_path, overlaps_path, overlap_type);
+            findUncontainedReads(reads_path, overlaps_path, overlap_type);
+            return 0;
+        case 3:
+            fastaToFastq(reads_path);
             return 0;
         case 0:
         default:
@@ -52,6 +55,8 @@ int main(int argc, char** argv) {
         }
     }
 
+    graph->print_csv("layout_graph.csv");
+
     // graph->remove_selected_nodes_and_edges();
     graph->remove_long_edges();
     while (true) {
@@ -62,7 +67,6 @@ int main(int argc, char** argv) {
         }
     }
     graph->print_contigs();
-    // graph->print_csv("layout_graph.csv");
 
     return 0;
 }

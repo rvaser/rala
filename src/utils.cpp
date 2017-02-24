@@ -14,12 +14,16 @@
 
 namespace rala {
 
+constexpr double kMinMappingPerc = 0.0;
+
 bool isSimilar(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
         (b >= a * (1 - eps) && b <= a * (1 + eps));
 }
 
 void findChimericReads(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
+
+    fprintf(stderr, "Searching chimering reads (with reference) {\n");
 
     auto oreader = overlap_type == 0 ?
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
@@ -170,7 +174,7 @@ void findChimericReads(const std::string& reads_path, const std::string& overlap
                 }
 
                 if (num_merged_overlaps + 1 != num_overlaps) {
-                    fprintf(stderr, "Chimeric: %u\n", last_read_id);
+                    // fprintf(stderr, "Chimeric: %u\n", last_read_id);
                     is_chimeric[last_read_id] = true;
                     ++num_chimeras;
                     for (uint32_t i = last_overlap_id; i < it->id(); ++i) {
@@ -204,11 +208,108 @@ void findChimericReads(const std::string& reads_path, const std::string& overlap
             reads[i]->quality().c_str());
     }
 
-    fprintf(stderr, "Found %u chimeric reads\n", num_chimeras);
+    fprintf(stderr, "  found %u chimeric reads\n", num_chimeras);
+    fprintf(stderr, "}\n");
 }
 
-void findUnusedOverlaps(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
+void findUncontainedReads(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type) {
 
+    fprintf(stderr, "Searching uncontained reads {\n");
+
+    std::vector<std::shared_ptr<Read>> reads;
+    auto rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
+
+    std::vector<uint32_t> read_lengths;
+
+    while (true) {
+        auto status = rreader->read_objects(reads, kChunkSize);
+        read_lengths.resize(read_lengths.size() + reads.size());
+
+        for (const auto& it: reads) {
+            read_lengths[it->id()] = it->sequence().size() * kMinMappingPerc;
+        }
+        reads.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+    rreader.reset();
+
+    std::vector<bool> is_valid_read(read_lengths.size(), false);
+
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    auto oreader = overlap_type == 0 ?
+        bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
+        bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
+
+    while (true) {
+        auto status = oreader->read_objects(overlaps, kChunkSize);
+
+        for (const auto& it: overlaps) {
+            if (it->a_end() - it->a_begin() >= read_lengths[it->a_id()]) {
+                is_valid_read[it->a_id()] = true;
+            }
+        }
+
+        overlaps.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+
+    rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
+    while (true) {
+        auto status = rreader->read_objects(reads, kChunkSize);
+        read_lengths.resize(read_lengths.size() + reads.size());
+
+        for (const auto& it: reads) {
+            if (is_valid_read[it->id()] == false) {
+                fprintf(stdout, "@%s\n%s\n+\n%s\n",
+                    it->name().c_str(),
+                    it->sequence().c_str(),
+                    it->quality().c_str());
+            }
+        }
+        reads.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
+
+    uint32_t num_uncontained_reads = 0;
+    for (const auto& it: is_valid_read) if (it == false) ++num_uncontained_reads;
+
+    fprintf(stderr, "  found %u uncontained reads (out of %lu)\n", num_uncontained_reads,
+        is_valid_read.size());
+    fprintf(stderr, "}\n");
+}
+
+void fastaToFastq(const std::string& reads_path) {
+
+    std::vector<std::shared_ptr<Read>> reads;
+    auto rreader = bioparser::createReader<Read, bioparser::FastaReader>(reads_path);
+
+    std::vector<uint32_t> read_lengths;
+
+    while (true) {
+        auto status = rreader->read_objects(reads, kChunkSize);
+        read_lengths.resize(read_lengths.size() + reads.size());
+
+        for (const auto& it: reads) {
+            fprintf(stdout, "@%s\n%s\n+\n%s\n",
+                it->name().c_str(),
+                it->sequence().c_str(),
+                std::string(it->sequence().size(), '*').c_str());
+        }
+        reads.clear();
+
+        if (status == false) {
+            break;
+        }
+    }
 }
 
 }

@@ -9,6 +9,8 @@
 
 namespace rala {
 
+constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
+
 /*
  * @brief Checks if two numbers are similar
  */
@@ -22,6 +24,11 @@ void findChimericReads(const std::string& reads_path, const std::string& overlap
 /*
  * @brief Finds overlaps which aren't fully mapped to reference
  */
-void findUnusedOverlaps(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type);
+void findUncontainedReads(const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type);
+
+/*
+ * @brief Creates FASTQ file from FASTA file with dummy quality
+ */
+void fastaToFastq(const std::string& reads_path);
 
 }
