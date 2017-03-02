@@ -52,16 +52,30 @@ bool Overlap::update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
         a_trimmed_begin = a_length_ - a_trimmed_end;
         a_trimmed_end = a_length_ - tmp;
     }
+    if (a_begin_ >= a_trimmed_end || a_end_ <= a_trimmed_begin) {
+        return false;
+    }
+
     if (b_rc_) {
         uint32_t tmp = b_trimmed_begin;
         b_trimmed_begin = b_length_ - b_trimmed_end;
         b_trimmed_end = b_length_ - tmp;
     }
+    if (b_begin_ >= b_trimmed_end || b_end_ <= b_trimmed_begin) {
+        return false;
+    }
 
     uint32_t a_new_begin = a_begin_ + (b_begin_ < b_trimmed_begin ? b_trimmed_begin - b_begin_ : 0);
     uint32_t a_new_end = a_end_ - (b_end_ > b_trimmed_end ? b_end_ - b_trimmed_end : 0);
+    if (a_new_begin >= a_trimmed_end || a_new_end <= a_trimmed_begin) {
+        return false;
+    }
+
     uint32_t b_new_begin = b_begin_ + (a_begin_ < a_trimmed_begin ? a_trimmed_begin - a_begin_ : 0);
     uint32_t b_new_end = b_end_ - (a_end_ > a_trimmed_end ? a_end_ - a_trimmed_end : 0);
+    if (b_new_begin >= b_trimmed_end || b_new_end <= b_trimmed_begin) {
+        return false;
+    }
 
     a_new_begin = (a_new_begin < a_trimmed_begin ? a_trimmed_begin : a_new_begin) - a_trimmed_begin;
     a_new_end = (a_new_end > a_trimmed_end ? a_trimmed_end : a_new_end) - a_trimmed_begin;

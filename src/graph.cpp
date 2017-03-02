@@ -21,16 +21,12 @@
 
 namespace rala {
 
-constexpr uint32_t kMinOverlapLength = 2000;
-constexpr uint32_t kMinMatchingBases = 100;
-constexpr double kMinMatchingBasesPerc = 0.055;
 constexpr double kChimericRatio = 1.75;
 constexpr double kMinMatchingBasesRatio = 2.5;
 constexpr uint32_t kMinCoverage = 3;
-constexpr uint32_t kMaxOverhang = 1000;
-constexpr double kMaxOverhangToOverlapRatio = 0.8;
+constexpr double kMaxOverhangToOverlapRatio = 0.875; //0.8;
 constexpr double kTransitiveEdgeEps = 0.12;
-constexpr uint32_t kMaxBubbleLength = 500000;
+constexpr uint32_t kMaxBubbleLength = 5000000;
 constexpr uint32_t kMinUnitigSize = 6;
 
 template<class T>
@@ -58,7 +54,7 @@ void shrinkVector(std::vector<std::shared_ptr<T>>& dst, uint64_t start, const st
     }
 }
 
-uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
+uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap, double& tt) {
 
     uint32_t left_overhang = std::min(overlap->a_begin(), overlap->b_begin());
     uint32_t right_overhang = std::min(overlap->a_length() - overlap->a_end(),
@@ -67,8 +63,10 @@ uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
     uint32_t a_len = overlap->a_end() - overlap->a_begin();
     uint32_t b_len = overlap->b_end() - overlap->b_begin();
 
-    if (left_overhang > kMaxOverhang * 1.5 || right_overhang > kMaxOverhang * 1.5 ||
-        a_len < (a_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio ||
+    tt += a_len / (double) (a_len + left_overhang + right_overhang);
+    tt += b_len / (double) (b_len + left_overhang + right_overhang);
+
+    if (a_len < (a_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio ||
         b_len < (b_len + left_overhang + right_overhang) * kMaxOverhangToOverlapRatio) {
         return 0; // internal match
     }
@@ -81,7 +79,6 @@ uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
     if (overlap->a_begin() > overlap->b_begin()) {
         return 3; // a to b overlap
     }
-
     return 4; // b to a overlap
 }
 
@@ -102,21 +99,20 @@ void printCoverageGraph(const std::vector<uint32_t>& hits, const std::string& pa
         if (hit & 1) --coverage;
         else ++coverage;
     }
-    double avege = total / (double) ((hits.back()>>1) - (hits.front()>>1));
     std::ofstream out(path);
-    //out.open(path);
     for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-        out << i << " " << coverage_graph[i] << " " << avege << std::endl;
+        out << i << " " << coverage_graph[i] << " " << 0 << std::endl;
     }
     out.close();
 }
 
-bool slopeRead(std::pair<uint32_t, uint32_t>& slope_region, const std::vector<uint32_t>& hits,
+bool slopeRead(std::vector<std::pair<uint32_t, uint32_t>>& slope_regions, const std::vector<uint32_t>& hits,
     const std::string& path, bool print = false) {
 
     bool is_slope_read = false;
-    slope_region.first = -1;
-    slope_region.second = 0;
+    std::pair<uint32_t, uint32_t> slope_region(-1, 0);
+    // slope_region.first = -1;
+    // slope_region.second = 0;
 
     auto deque_add = [](std::deque<std::pair<int32_t, int32_t>>& window, int32_t k, int32_t value, int32_t position) -> void {
         while (!window.empty() && window.back().second <= value) {
@@ -184,6 +180,8 @@ bool slopeRead(std::pair<uint32_t, uint32_t>& slope_region, const std::vector<ui
         }
     }
 
+    slope_regions.push_back(slope_region);
+
     if (print && is_slope_read) {
         std::ofstream out(path);
         std::vector<int32_t> slopes(coverage_graph.size(), 0);
@@ -199,7 +197,8 @@ bool slopeRead(std::pair<uint32_t, uint32_t>& slope_region, const std::vector<ui
     return is_slope_read;
 }
 
-void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool print = false) {
+void findSlopes(std::vector<std::pair<uint32_t, uint32_t>>& hills, const std::vector<uint32_t>& hits,
+    const std::string& path, bool print = false) {
 
     std::vector<uint32_t> coverage_graph((hits.back() >> 1) + 1, 0);
     int32_t coverage = 0;
@@ -233,12 +232,8 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
 
-    int32_t k = std::max(500U, uint32_t(0.042 * ((hits.back()>>1) - (hits.front()>>1))));
+    int32_t k = std::max(500U, uint32_t(0.03 * ((hits.back()>>1) - (hits.front()>>1))));
     int32_t read_length = coverage_graph.size();
-
-    // bool save_downslope = true;
-    // bool save_upslope = false;
-    // uint32_t upslope = 0;
 
     for (int32_t i = -1 * k + 2; i < read_length; ++i) {
         if (i < read_length - k) {
@@ -250,73 +245,64 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool
             window_add(left_window, k, coverage_graph[i - 1], i - 1);
             window_update(left_window, k, i - 1);
 
-            int32_t current = coverage_graph[i] * 1.42;
+            int32_t current = coverage_graph[i] * 1.3;
             if (left_window.front().second > current) {
                 slopes.push_back(i << 1 | 0);
             }
             if (!right_window.empty() && right_window.front().second > current) {
                 slopes.push_back(i << 1 | 1);
             }
-            /*if (left_window.front().second > current) {
-                if (save_downslope) {
-                    slopes.push_back(i << 1 | 0);
-                    save_downslope = false;
-                }
-            } else {
-                save_downslope = true;
-            }
-            if (!right_window.empty() && right_window.front().second > current) {
-                save_upslope = true;
-                upslope = i << 1 | 1;
-            } else {
-                if (save_upslope) {
-                    slopes.push_back(upslope);
-                    save_upslope = false;
-                }
-            }*/
         }
     }
 
-    int32_t max_width = ((hits.back()>>1) - (hits.front()>>1)) * 0.84;
+    int32_t max_width = ((hits.back()>>1) - (hits.front()>>1)) * 0.7;
 
-    if (print && slopes.size() > 2) {
+    if (slopes.size() > 2) {
 
         fprintf(stderr, "%s\n", path.c_str());
-        uint32_t downslope = 0, fdownslope = 0;
-        bool found = false;
+        uint32_t ldownslope = 0, fdownslope = 0;
+        bool found_fds = false;
 
-        uint32_t upslope = slopes[0] >> 1, lupslope = 0;
+        uint32_t fupslope = 0, lupslope = 0;
+        bool found_fus = false;
 
         std::vector<std::pair<uint32_t, uint32_t>> slope_regions;
 
+        uint32_t slope_width = 2 * k;
         for (uint32_t s = 1; s < slopes.size(); ++s) {
-            // slope_graph[slopes[s] >> 1] = slopes[s] & 1 ? 2 : 1;
-
             if (slopes[s] & 1) {
-                if ((slopes[s] >> 1) - upslope > 2 * k) {
-                    slope_regions.emplace_back(upslope << 1 | 1, lupslope);
-                    upslope = slopes[s] >> 1;
-                    lupslope = upslope;
+                if (found_fus) {
+                    if ((slopes[s] >> 1) - fupslope > slope_width) {
+                        slope_regions.emplace_back(fupslope << 1 | 1, lupslope);
+                        fupslope = slopes[s] >> 1;
+                        lupslope = fupslope;
+                    } else {
+                        lupslope = slopes[s] >> 1;
+                    }
                 } else {
-                    lupslope = slopes[s] >> 1;
-                }
-            } else if (found) {
-                if ((slopes[s] >> 1) - fdownslope > 2 * k) {
-                    slope_regions.emplace_back(fdownslope << 1 | 0, downslope);
-                    fdownslope = slopes[s] >> 1;
-                    downslope = fdownslope;
-                } else {
-                    downslope = slopes[s] >> 1;
+                    found_fus = true;
+                    fupslope = slopes[s] >> 1;
+                    lupslope = fupslope;
                 }
             } else {
-                found = true;
-                fdownslope = slopes[s] >> 1;
-                downslope = fdownslope;
+                if (found_fds) {
+                    if ((slopes[s] >> 1) - fdownslope > slope_width) {
+                        slope_regions.emplace_back(fdownslope << 1 | 0, ldownslope);
+                        fdownslope = slopes[s] >> 1;
+                        ldownslope = fdownslope;
+                    } else {
+                        ldownslope = slopes[s] >> 1;
+                    }
+                } else {
+                    found_fds = true;
+                    fdownslope = slopes[s] >> 1;
+                    ldownslope = fdownslope;
+                }
             }
         }
 
-        slope_regions.emplace_back(upslope << 1 | 1, lupslope);
-        slope_regions.emplace_back(fdownslope << 1 | 0, downslope);
+        if (found_fus) slope_regions.emplace_back(fupslope << 1 | 1, lupslope);
+        if (found_fds) slope_regions.emplace_back(fdownslope << 1 | 0, ldownslope);
         std::sort(slope_regions.begin(), slope_regions.end());
 
         for (const auto& it: slope_regions) {
@@ -354,45 +340,55 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool
             fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
         }
 
-        // hill check
+        // chimeric check
+        auto rearrange_slopes = [&](uint32_t i, uint32_t j) -> void {
+            uint32_t begin = std::max(slope_regions[i].first >> 1, slope_regions[j].first >> 1);
+            uint32_t end = std::min(slope_regions[i].second, slope_regions[j].second);
+            uint32_t min_left_id = begin, min_right_id = begin;
+            for (uint32_t s = begin + 1; s < end; ++s) {
+                if (coverage_graph[s] < coverage_graph[min_left_id]) {
+                    min_left_id = s;
+                }
+                if (coverage_graph[s] <= coverage_graph[min_right_id]) {
+                    min_right_id = s;
+                }
+            }
+            ++min_left_id;
+            --min_right_id;
+
+            slope_regions[i].first = min_left_id << 1 | 0;
+            slope_regions[i].second = min_left_id;
+            slope_regions[j].first = min_right_id << 1 | 1;
+            slope_regions[j].second = min_right_id;
+        };
+
+        for (uint32_t s = 0; s < slope_regions.size() - 1; ++s) {
+            if ((slope_regions[s].first & 1) && !(slope_regions[s + 1].first & 1) &&
+                slope_regions[s].second > (slope_regions[s + 1].first >> 1)) {
+                rearrange_slopes(s, s + 1);
+            }
+        }
+
         for (uint32_t s = 0; s < slope_regions.size() - 1; ++s) {
             if (slope_regions[s].second > (slope_regions[s + 1].first >> 1)) {
-                uint32_t begin = std::max(slope_regions[s].first >> 1, slope_regions[s + 1].first >> 1);
-                uint32_t end = std::min(slope_regions[s].second, slope_regions[s + 1].second);
-                uint32_t min_left_id = begin, min_right_id = begin;
-                for (uint32_t ss = begin + 1; ss < end; ++ss) {
-                    if (coverage_graph[ss] < coverage_graph[min_left_id]) {
-                        min_left_id = ss;
-                    }
-                    if (coverage_graph[ss] <= coverage_graph[min_right_id]) {
-                        min_right_id = ss;
-                    }
-                }
-                ++min_left_id;
-                --min_right_id;
-
-                slope_regions[s].first = min_left_id << 1 | 0;
-                slope_regions[s].second = min_left_id;
-                slope_regions[s + 1].first = min_right_id << 1 | 1;
-                slope_regions[s + 1].second = min_right_id;
+                rearrange_slopes(s, s + 1);
             }
         }
         fprintf(stderr, "Chimeric check\n");
-
-        std::vector<uint32_t> slope_graph(coverage_graph.size(), 0);
         for (const auto& it: slope_regions) {
             fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
-            // slope_graph[it.first >> 1] = 3;
-            // slope_graph[it.second] = 3;
         }
         fprintf(stderr, "\n");
 
+        std::vector<uint32_t> slope_graph(coverage_graph.size(), 0);
         slopes.clear();
         for (const auto& region: slope_regions) {
             if ((region.first >> 1) < (hits.front() >> 1)) {
-                slopes.push_back((((region.first >> 1) + region.second) / 2 + 1) << 1 | (region.first & 1));
+                // slopes.push_back((((region.first >> 1) + region.second) / 2 + 1) << 1 | (region.first & 1));
+                slopes.push_back((region.second + 1) << 1 | 1);
             } else if (region.second >= (hits.back() >> 1)) {
-                slopes.push_back((((region.first >> 1) + region.second) / 2 - 1) << 1 | (region.first & 1));
+                // slopes.push_back((((region.first >> 1) + region.second) / 2 - 1) << 1 | (region.first & 1));
+                slopes.push_back(((region.first >> 1) - 1) << 1 | 0);
             } else if (region.first & 1) { // upslope
                 slopes.push_back(region.first);
             } else { // downslope
@@ -409,11 +405,12 @@ void findSlopes(const std::vector<uint32_t>& hits, const std::string& path, bool
                     slope_graph[(slopes[s] >> 1)] = 2;
                     slope_graph[(slopes[s + 1] >> 1)] = 1;
                     has_hill = true;
+                    hills.emplace_back(slopes[s] >> 1, slopes[s + 1] >> 1);
                 }
             }
         }
 
-        if (has_hill) {
+        if (has_hill && print) {
             std::ofstream out(path);
             for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
                 out << i << " " << coverage_graph[i] << " " << slope_graph[i] << std::endl;
@@ -434,7 +431,7 @@ void printPileGraph(const std::vector<uint32_t>& hits, const std::string& path) 
 };
 
 void prefilterData(std::vector<std::pair<uint32_t, uint32_t>>& regions,
-    std::vector<std::pair<uint32_t, uint32_t>>& slope_regions,
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>>& slope_regions,
     std::vector<bool>& is_valid_read,
     std::vector<bool>& is_valid_overlap,
     const std::string& reads_path,
@@ -486,14 +483,13 @@ void prefilterData(std::vector<std::pair<uint32_t, uint32_t>>& regions,
             continue;
         }
 
-        // if (i == 1871) printPileGraph(hits[i], "graphs/" + std::to_string(i));
+        // if (i == 24337) printPileGraph(hits[i], "graphs/" + std::to_string(i));
         std::sort(hits[i].begin(), hits[i].end());
-        // printCoverageGraph(hits[i], "graphs/r" + std::to_string(i));
 
-        findSlopes(hits[i], "graphs/l" + std::to_string(i), true);
-        if (slopeRead(slope_regions[i], hits[i], "graphs/c" + std::to_string(i))) {
-            ++num_slope_reads;
-        }
+        findSlopes(slope_regions[i], hits[i], "graphs/l" + std::to_string(i));
+        //if (slopeRead(slope_regions[i], hits[i], "graphs/c" + std::to_string(i))) {
+        //    ++num_slope_reads;
+        //}
 
         int32_t start = hits[i].front() >> 1;
         int32_t end = hits[i].back() >> 1;
@@ -584,8 +580,6 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
         bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
 
-    uint64_t len = 0, sim = 0, mb = 0, ovh = 0;
-
     while (true) {
 
         auto status = oreader->read_objects(overlaps, kChunkSize);
@@ -593,30 +587,16 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
         for (const auto& it: overlaps) {
 
-            len += std::min(it->a_end() - it->a_begin(), it->b_end() - it->b_begin());
-            sim += it->quality() * 100;
-            mb += it->matching_bases();
-            ovh += std::min(std::min(it->a_begin(), it->b_begin()),
-                std::min(it->a_length() - it->a_end(), it->b_length() - it->b_end()));
-
             max_read_id = std::max(max_read_id, std::max(it->a_id(), it->b_id()));
 
-            // self match
+            // self match check
             if (it->a_id() == it->b_id()) {
                 is_valid_overlap[it->id()] = false;
                 ++num_self_matches;
                 continue;
             }
 
-            // bad overlap
-            if (it->a_end() - it->a_begin() < kMinOverlapLength ||
-                it->b_end() - it->b_begin() < kMinOverlapLength ||
-                it->matching_bases() < kMinMatchingBases) {
-                is_valid_overlap[it->id()] = false;
-                continue;
-            }
-
-            // check if multiple overlaps exist
+            // multiple overlaps check
             if (current_overlaps.size() != 0 && current_overlaps.front()->a_id() != it->a_id()) {
                 num_multiple_matches += remove_multiple_overlaps(current_overlaps, is_valid_overlap);
                 current_overlaps.clear();
@@ -634,18 +614,10 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
     oreader.reset();
 
-    fprintf(stderr, "Average len, sim, mb, ovh = %lf, %lf, %lf, %lf\n",
-        len / (double) is_valid_overlap.size(),
-        sim / (double) is_valid_overlap.size(),
-        mb / (double) is_valid_overlap.size(),
-        ovh / (double) is_valid_overlap.size());
-    len = 0; sim = 0; mb = 0; ovh = 0;
-    uint64_t num_valid = 0;
-
     is_valid_read.resize(max_read_id + 1, true);
 
     std::vector<std::pair<uint32_t, uint32_t>> regions(is_valid_read.size());
-    std::vector<std::pair<uint32_t, uint32_t>> slope_regions(is_valid_read.size());
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> slope_regions(is_valid_read.size());
     if (prefilter == true) {
         prefilterData(regions, slope_regions, is_valid_read, is_valid_overlap,
             reads_path, overlaps_path, overlap_type);
@@ -656,8 +628,13 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
         bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
 
+    std::vector<uint32_t> num_overlaps_per_read(is_valid_read.size(), 0);
+    std::vector<uint32_t> num_removed_hillaps(is_valid_read.size(), 0);
+
     uint32_t num_slope_overlaps = 0;
     std::set<uint32_t> slope_read_overlaps;
+    uint64_t tot = 0;
+    double tt = 0;
     while (true) {
         uint64_t current_overlap_id = overlaps.size();
         // uint64_t i = start;
@@ -672,27 +649,65 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 is_valid_overlap[it->id()] = false;
                 continue;
             }
+            ++num_overlaps_per_read[it->a_id()];
+            ++num_overlaps_per_read[it->b_id()];
 
             if (prefilter) {
-                if (slope_regions[it->a_id()].second != 0) {
+                /*if (slope_regions[it->a_id()].front().second != 0) {
                     slope_read_overlaps.insert(it->id());
-                    uint32_t begin = (it->a_rc() ? it->a_length() - it->a_end() : it->a_begin()) + 1;
-                    uint32_t end = (it->a_rc() ? it->a_length() - it->a_begin() : it->a_end()) - 1;
-                    if (begin > slope_regions[it->a_id()].first || end < slope_regions[it->a_id()].second) {
+                    uint32_t begin = (it->a_rc() ? it->a_length() - it->a_end() : it->a_begin());
+                    uint32_t end = (it->a_rc() ? it->a_length() - it->a_begin() : it->a_end());
+                    if (begin > slope_regions[it->a_id()].front().first || end < slope_regions[it->a_id()].front().second) {
                         is_valid_overlap[it->id()] = false;
                         ++num_slope_overlaps;
                         continue;
                     }
                 }
-                if (slope_regions[it->b_id()].second != 0) {
+                if (slope_regions[it->b_id()].front().second != 0) {
                     slope_read_overlaps.insert(it->id());
-                    uint32_t begin = (it->b_rc() ? it->b_length() - it->b_end() : it->b_begin()) + 1;
-                    uint32_t end = (it->b_rc() ? it->b_length() - it->b_begin() : it->b_end()) - 1;
-                    if (begin > slope_regions[it->b_id()].first || end < slope_regions[it->b_id()].second) {
+                    uint32_t begin = (it->b_rc() ? it->b_length() - it->b_end() : it->b_begin());
+                    uint32_t end = (it->b_rc() ? it->b_length() - it->b_begin() : it->b_end());
+                    if (begin > slope_regions[it->b_id()].front().first || end < slope_regions[it->b_id()].front().second) {
                         is_valid_overlap[it->id()] = false;
                         ++num_slope_overlaps;
                         continue;
                     }
+                }*/
+                uint32_t contained_hills = 0, overlaping_hills = 0;
+                if (slope_regions[it->a_id()].size() != 0) {
+                    slope_read_overlaps.insert(it->id());
+                    uint32_t begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
+                    uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
+
+                    for (const auto& sreg: slope_regions[it->a_id()]) {
+                        if (begin < sreg.first && end > sreg.second) {
+                            ++contained_hills;
+                        } else if (!(begin > sreg.second || end < sreg.first)) {
+                            ++overlaping_hills;
+                        }
+                    }
+                }
+
+                if (slope_regions[it->b_id()].size() != 0) {
+                    slope_read_overlaps.insert(it->id());
+                    uint32_t begin = it->b_rc() ? it->b_length() - it->b_end() : it->b_begin();
+                    uint32_t end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
+
+                    for (const auto& sreg: slope_regions[it->b_id()]) {
+                        if (begin < sreg.first && end > sreg.second) {
+                            ++contained_hills;
+                        } else if (!(begin > sreg.second || end < sreg.first)) {
+                            ++overlaping_hills;
+                        }
+                    }
+                }
+
+                if (overlaping_hills > 0 && contained_hills == 0) {
+                    ++num_removed_hillaps[it->a_id()];
+                    ++num_removed_hillaps[it->b_id()];
+                    ++num_slope_overlaps;
+                    is_valid_overlap[it->id()] = false;
+                    // continue;
                 }
 
                 bool is_valid = it->update(
@@ -702,27 +717,14 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                     regions[it->b_id()].second
                 );
 
-                if (is_valid) {
-                    ++num_valid;
-                    len += std::min(it->a_end() - it->a_begin(), it->b_end() - it->b_begin());
-                    sim += it->quality() * 100;
-                    mb += it->matching_bases();
-                    ovh += std::min(std::min(it->a_begin(), it->b_begin()),
-                        std::min(it->a_length() - it->a_end(), it->b_length() - it->b_end()));
-                }
-
-                if (!is_valid ||
-                    it->a_end() - it->a_begin() < kMinOverlapLength ||
-                    it->b_end() - it->b_begin() < kMinOverlapLength ||
-                    it->matching_bases() < kMinMatchingBases ||
-                    it->quality() < kMinMatchingBasesPerc) {
-
+                if (!is_valid) {
                     is_valid_overlap[it->id()] = false;
                     continue;
                 }
             }
 
-            it->set_type(classifyOverlap(it));
+            it->set_type(classifyOverlap(it, tt));
+            tot += 2;
             switch (it->type()) {
                 case 0:
                     is_valid_overlap[it->id()] = false;
@@ -748,9 +750,15 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
     oreader.reset();
 
-    fprintf(stderr, "Average len, sim, mb, ovh = %lf, %lf, %lf, %lf\n",
-        len / (double) num_valid, sim / (double) num_valid,
-        mb / (double) num_valid, ovh / (double) num_valid);
+    uint32_t zero_ovl_reads = 0;
+    for (uint32_t i = 0; i < is_valid_read.size(); ++i) {
+        if (num_overlaps_per_read[i] != 0 && num_overlaps_per_read[i] == num_removed_hillaps[i]) {
+            // fprintf(stderr, "0ovl read = %d\n", i);
+            ++zero_ovl_reads;
+        }
+    }
+    fprintf(stderr, "Zero ovl reads = %d\n", zero_ovl_reads);
+    fprintf(stderr, "Avg len/ovh ratio = %lf, %lf, %lu\n", tt / (double) tot, tt, tot);
 
     // check if all non valid overlaps are deleted
     bool shrink = false;
@@ -774,6 +782,10 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
         for (uint64_t i = current_read_id; i < reads.size(); ++i) {
             auto& it = reads[i];
+            if (it->id() >= is_valid_read.size()) {
+                is_valid_read.resize(it->id() + 1, false);
+                continue;
+            }
             if (!is_valid_read[it->id()]) {
                 continue;
             }
@@ -1326,7 +1338,7 @@ uint32_t Graph::remove_chimeras() {
         if (suff != -1 && nodes_[path[suff]]->in_degree() > 1) return;
 
         if (pref == -1) {
-            // remove everything to after last suff node
+            // remove everything after last suff node
             for (uint32_t i = suff; i < path.size() - 1; ++i) {
                 dst.push_back(find_edge(path[i], path[i + 1]));
             }
@@ -1341,7 +1353,7 @@ uint32_t Graph::remove_chimeras() {
                 dst.push_back(find_edge(path[i], path[i + 1]));
             }
         } else if (suff >= pref && nodes_[path[0]]->in_degree() == 0) {
-            // remove everything to after last suff node
+            // remove everything after last suff node
             for (uint32_t i = suff; i < path.size() - 1; ++i) {
                 dst.push_back(find_edge(path[i], path[i + 1]));
             }
