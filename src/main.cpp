@@ -1,15 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <algorithm>
-
-#include <unordered_set>
-#include <algorithm>
 
 #include "overlap.hpp"
 #include "graph.hpp"
 #include "read.hpp"
-#include "utils.hpp"
-#include "bioparser/src/bioparser.hpp"
+#include "preprocess.hpp"
+#include "thread_pool/src/thread_pool.hpp"
 
 using namespace rala;
 
@@ -34,9 +30,12 @@ int main(int argc, char** argv) {
             break;
     }
 
+    std::shared_ptr<thread_pool::ThreadPool> thread_pool = thread_pool::createThreadPool(1);
+
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    preprocessData(reads, overlaps, reads_path, overlaps_path, overlap_type);
+    preprocessData(reads, overlaps, reads_path, overlaps_path, overlap_type,
+        thread_pool);
 
     auto graph = createGraph(reads, overlaps);
     overlaps.clear();

@@ -14,17 +14,7 @@
 namespace rala {
 
 class Read;
-class ReadFrame;
 class Overlap;
-
-/*
- * @brief Remove contained reads and their overlaps; Remove unreliable overlaps;
- *   If prefilter is true, trim reads from both sides based on read to read overlaps (Li 2016)
- *   and find chimeric reads
- */
-void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
-    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
-    bool prefilter = true);
 
 class Graph;
 std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
