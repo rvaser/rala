@@ -125,7 +125,9 @@ bool findRegions(std::vector<std::pair<uint32_t, uint32_t>>& valid_regions,
         if (old_coverage < min_coverage && coverage >= min_coverage) {
             region_begin = pos;
         } else if (old_coverage >= min_coverage && coverage < min_coverage) {
-            valid_regions.emplace_back(region_begin, pos);
+            if (pos - region_begin > 500) {
+                valid_regions.emplace_back(region_begin, pos);
+            }
         }
     }
 
@@ -723,7 +725,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
     auto rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
 
-    uint32_t trimmed_read_id = 0;
+    uint32_t trimmed_read_id = 1;
     std::ofstream trimmed_reads_file;
     if (prefilter) {
         trimmed_reads_file.open("trimmed_reads.fastq");
@@ -739,9 +741,9 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             if (prefilter && !valid_regions[it->id()].empty()) {
                 for (const auto& r: valid_regions[it->id()]) {
                     trimmed_reads_file << "@" << trimmed_read_id++ << std::endl;
-                    trimmed_reads_file << it->sequence().substr(r.first, r.second) << std::endl;
+                    trimmed_reads_file << it->sequence().substr(r.first, r.second - r.first) << std::endl;
                     trimmed_reads_file << "+" << std::endl;
-                    trimmed_reads_file << it->quality().substr(r.first, r.second) << std::endl;
+                    trimmed_reads_file << it->quality().substr(r.first, r.second - r.first) << std::endl;
                 }
             }
 
