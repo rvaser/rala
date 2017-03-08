@@ -28,7 +28,7 @@ constexpr double kSlopeWidthRatio = 0.03;
 constexpr double kHillWidthRatio = 0.7;
 
 // unmapped reads
-constexpr double kMinMappingPerc = 0.0;
+constexpr double kMinMappingPerc = 0.85;
 
 template<class T>
 void shrinkVector(std::vector<std::shared_ptr<T>>& dst, uint64_t start, const std::vector<bool>& is_valid) {
@@ -367,7 +367,7 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
         }
 
         if (has_hill && print) {
-            std::ofstream out("graph/" + std::to_string(id));
+            std::ofstream out("graphs/h" + std::to_string(id));
             for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
                 out << i << " " << coverage_graph[i] << " " << slope_graph[i] << std::endl;
             }
@@ -573,10 +573,15 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     oreader.reset();
     is_valid_read.resize(mappings.size(), true);
 
+    fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
+    fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
+
     // find contiguous read regions which have coverage larger than kMinCoverage
     std::vector<std::vector<std::pair<uint32_t, uint32_t>>> valid_regions;
     std::vector<std::pair<uint32_t, uint32_t>> longest_region;
     if (prefilter) {
+        fprintf(stderr, "  Prefiltering data {\n");
+
         valid_regions.resize(mappings.size());
         longest_region.resize(mappings.size());
 
@@ -590,6 +595,12 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             thread_futures[i].wait();
             is_valid_read[i] = thread_futures[i].get();
         }
+
+        uint32_t num_prefiltered_reads = 0;
+        for (const auto& it: is_valid_read) if (it == false) ++num_prefiltered_reads;
+
+        fprintf(stderr, "    number of prefiltered reads = %u\n", num_prefiltered_reads);
+        fprintf(stderr, "  }\n");
     }
 
     // find coverage hills which represent repeats or are parts of chimeric reads
@@ -598,7 +609,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         std::vector<std::future<void>> thread_futures;
         for (uint32_t i = 0; i < mappings.size(); ++i) {
             thread_futures.emplace_back(thread_pool->submit_task(findHills,
-                std::ref(hill_regions[i]), std::ref(mappings[i]), i, true));
+                std::ref(hill_regions[i]), std::ref(mappings[i]), i, false));
         }
         for (uint32_t i = 0; i < mappings.size(); ++i) {
             thread_futures[i].wait();
@@ -706,12 +717,17 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             is_valid_overlap[it->id()] = false;
         }
     }
-
     if (shrink) {
         shrinkVector(overlaps, 0, is_valid_overlap);
     }
 
     auto rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
+
+    uint32_t trimmed_read_id = 0;
+    std::ofstream trimmed_reads_file;
+    if (prefilter) {
+        trimmed_reads_file.open("trimmed_reads.fastq");
+    }
 
     while (true) {
         uint64_t current_read_id = reads.size();
@@ -719,7 +735,15 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
         for (uint64_t i = current_read_id; i < reads.size(); ++i) {
             auto& it = reads[i];
-            // TODO: print valid read regions for later use!
+            // print valid read regions for later use!
+            if (prefilter && !valid_regions[it->id()].empty()) {
+                for (const auto& r: valid_regions[it->id()]) {
+                    trimmed_reads_file << "@" << trimmed_read_id++ << std::endl;
+                    trimmed_reads_file << it->sequence().substr(r.first, r.second) << std::endl;
+                    trimmed_reads_file << "+" << std::endl;
+                    trimmed_reads_file << it->quality().substr(r.first, r.second) << std::endl;
+                }
+            }
 
             if (it->id() >= is_valid_read.size()) {
                 is_valid_read.resize(it->id() + 1, false);
@@ -739,14 +763,15 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             break;
         }
     }
-    rreader.reset();
+
+    if (prefilter) {
+        trimmed_reads_file.close();
+    }
 
     uint64_t num_valid_reads = 0, num_valid_overlaps = 0;
     for (const auto& it: is_valid_read) if (it == true) ++num_valid_reads;
     for (const auto& it: is_valid_overlap) if (it == true) ++num_valid_overlaps;
 
-    fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
-    fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
     fprintf(stderr, "  number of valid overlaps = %lu (out of %lu)\n", num_valid_overlaps, is_valid_overlap.size());
     fprintf(stderr, "  number of valid reads = %lu (out of %lu)\n", num_valid_reads, is_valid_read.size());
     fprintf(stderr, "}\n\n");

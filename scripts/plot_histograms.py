@@ -6,10 +6,8 @@ colors = [None, 'r', 'g', 'k']
 for i in range(int(sys.argv[1])):
     if (os.path.isfile("c"+str(i))):
         file_name = "c"+str(i)
-    elif (os.path.isfile("r"+str(i))):
-        file_name = "r"+str(i)
-    elif (os.path.isfile("l"+str(i))):
-        file_name = "l"+str(i)
+    elif (os.path.isfile("h"+str(i))):
+        file_name = "h"+str(i)
     else:
         file_name = ""
 

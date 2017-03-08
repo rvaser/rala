@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
             break;
     }
 
-    std::shared_ptr<thread_pool::ThreadPool> thread_pool = thread_pool::createThreadPool(1);
+    std::shared_ptr<thread_pool::ThreadPool> thread_pool = thread_pool::createThreadPool();
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
