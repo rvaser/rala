@@ -93,9 +93,16 @@ private:
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
 
-    void remove_marked_edges();
+    int32_t find_edge(uint32_t src, uint32_t dst);
 
-    void locate_bubble_sources(std::vector<uint32_t>& dst);
+    /*
+     * @brief Finds edges in path which if removed do not affect the connectivity
+     * of the rest of the graph
+     */
+    void find_removable_edges(std::vector<uint32_t>& dst, const std::vector<int32_t>& path,
+        bool chimeric = false);
+
+    void remove_marked_edges();
 
     class Node;
     class Edge;

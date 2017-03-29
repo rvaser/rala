@@ -509,69 +509,6 @@ uint32_t Graph::remove_chimeras() {
         }
     };
 
-    auto find_edge = [&](uint32_t src, uint32_t dst) -> int32_t {
-        for (const auto& edge: nodes_[src]->suffix_edges) {
-            if (edge->end_node->id == dst) {
-                return edge->id;
-            }
-        }
-        return -1;
-    };
-
-    auto check_path = [&](std::vector<uint32_t>& dst, const std::vector<int32_t>& path) -> void {
-        // find first node with multiple in edges
-        int32_t pref = -1;
-        for (uint32_t i = 1; i < path.size() - 1; ++i) {
-            if (nodes_[path[i]]->in_degree() > 1) {
-                pref = i;
-                break;
-            }
-        }
-        // find last node with multiple out edges
-        int32_t suff = -1;
-        for (uint32_t i = 1; i < path.size() - 1; ++i) {
-            if (nodes_[path[i]]->out_degree() > 1) {
-                suff = i;
-            }
-        }
-
-        if (pref == -1 && suff == -1) {
-            // remove whole path
-            for (uint32_t i = 0; i < path.size() - 1; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-            return;
-        }
-        if (pref != -1 && nodes_[path[pref]]->out_degree() > 1) return;
-        if (suff != -1 && nodes_[path[suff]]->in_degree() > 1) return;
-
-        if (pref == -1) {
-            // remove everything after last suff node
-            for (uint32_t i = suff; i < path.size() - 1; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-        } else if (suff == -1) {
-            // remove everything before first pref node
-            for (int32_t i = 0; i < pref; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-        } else if (suff < pref) {
-            // remove everything between last suff and first pref node
-            for (int32_t i = suff; i < pref; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-        } else if (suff >= pref && nodes_[path[0]]->in_degree() == 0) {
-            // remove everything after last suff node
-            for (uint32_t i = suff; i < path.size() - 1; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-            // remove everything before first pref node
-            for (int32_t i = 0; i < pref; ++i) {
-                dst.push_back(find_edge(path[i], path[i + 1]));
-            }
-        }
-    };
-
     uint32_t num_chimeric_edges = 0;
 
     for (const auto& node: nodes_) {
@@ -647,9 +584,8 @@ uint32_t Graph::remove_chimeras() {
                 std::reverse(path.begin(), path.end());
             }
 
-            // check chimeric patterns
             std::vector<uint32_t> chimeric_edges;
-            check_path(chimeric_edges, path);
+            find_removable_edges(chimeric_edges, path, true);
 
             if (chimeric_edges.size() > 0) {
                 // remove chimeric edges
@@ -694,7 +630,7 @@ uint32_t Graph::remove_bubbles() {
     std::vector<int32_t> predecessor(nodes_.size(), -1);
     std::deque<uint32_t> queue;
 
-    auto extract_path = [&](std::vector<uint32_t>& dst, int32_t source, int32_t sink) -> void {
+    auto extract_path = [&](std::vector<int32_t>& dst, int32_t source, int32_t sink) -> void {
         int32_t curr_id = sink;
         while (curr_id != source) {
             dst.push_back(curr_id);
@@ -704,8 +640,8 @@ uint32_t Graph::remove_bubbles() {
         std::reverse(dst.begin(), dst.end());
     };
 
-    auto is_valid_bubble = [](const std::vector<uint32_t>& path, const std::vector<uint32_t>& other_path) -> bool {
-        std::set<uint32_t> node_set;
+    auto is_valid_bubble = [](const std::vector<int32_t>& path, const std::vector<int32_t>& other_path) -> bool {
+        std::set<int32_t> node_set;
         for (const auto& id: path) node_set.insert(id);
         for (const auto& id: other_path) node_set.insert(id);
         if (path.size() + other_path.size() - 2 != node_set.size()) {
@@ -720,7 +656,7 @@ uint32_t Graph::remove_bubbles() {
         return true;
     };
 
-    auto path_params = [&](const std::vector<uint32_t>& path, uint32_t& num_reads, uint32_t& matching_bases, double& quality) -> void {
+    auto path_params = [&](const std::vector<int32_t>& path, uint32_t& num_reads, uint32_t& matching_bases, double& quality) -> void {
         num_reads = 0;
         for (const auto& it: path) num_reads += nodes_[it]->unitig_size;
         for (const auto& edge: nodes_[path[0]]->suffix_edges) {
@@ -733,35 +669,8 @@ uint32_t Graph::remove_bubbles() {
         return;
     };
 
-    auto remove_path = [&](const std::vector<uint32_t>& path) -> void {
-        for (uint32_t i = 0; i < path.size() - 1; ++i) {
-            const auto& node = nodes_[path[i]];
-            if (i != 0 && (node->in_degree() > 1 || node->out_degree() > 1)) {
-                // fprintf(stderr, "Breaking at %d\n", path[i]);
-                break;
-            }
-            for (const auto& edge: node->suffix_edges) {
-                if (edge->end_node->id == path[i + 1]) {
-                    edge->mark = true;
-                    edge->pair->mark = true;
-                    marked_edges_.insert(edge->id);
-                    marked_edges_.insert(edge->pair->id);
-                    break;
-                }
-            }
-        }
-        return;
-    };
-
     uint32_t num_bubbles_popped = 0;
-
-    std::vector<uint32_t> bubble_candidates;
-    locate_bubble_sources(bubble_candidates);
-    for (const auto& id: bubble_candidates) {
-        const auto& node = nodes_[id];
-        // fprintf(stderr, "Considering bubble source candidate %d for bubble popping\r", id);
-
-        // for (const auto& node: nodes_) {
+    for (const auto& node: nodes_) {
         if (node == nullptr || node->out_degree() < 2) continue;
 
         bool found_sink = false;
@@ -808,7 +717,7 @@ uint32_t Graph::remove_bubbles() {
         if (found_sink) {
             // fprintf(stderr, "Source = %u, sink = %u, sink_predecesors = [%u, %u]\n", source, sink, predecessor[sink], sink_other_predecesor);
 
-            std::vector<uint32_t> path, other_path;
+            std::vector<int32_t> path, other_path;
             extract_path(path, source, sink);
             other_path.push_back(sink);
             extract_path(other_path, source, sink_other_predecesor);
@@ -837,15 +746,29 @@ uint32_t Graph::remove_bubbles() {
                 //      path_reads, path_matching_bases, path_quality,
                 //      other_path_reads, other_path_matching_bases, other_path_quality);
 
+                std::vector<uint32_t> edges_for_removal;
                 if (path_reads > other_path_reads || (path_reads == other_path_reads && path_matching_bases > other_path_matching_bases)) {
                     // fprintf(stderr, "2\n");
-                    remove_path(other_path);
+                    // remove_path(other_path);
+                    find_removable_edges(edges_for_removal, other_path);
                 } else {
                     // fprintf(stderr, "1\n");
-                    remove_path(path);
+                    // remove_path(path);
+                    find_removable_edges(edges_for_removal, path);
                 }
-                remove_marked_edges();
-                ++num_bubbles_popped;
+
+                for (const auto& edge_id: edges_for_removal) {
+                    // fprintf(stderr, "%d\n", edge_id);
+                    // fprintf(stderr, "Removing: %d -> %d\n", edges_[edge_id]->begin_node->id, edges_[edge_id]->end_node->id);
+                    edges_[edge_id]->mark = true;
+                    edges_[edge_id]->pair->mark = true;
+                    marked_edges_.insert(edge_id);
+                    marked_edges_.insert(edges_[edge_id]->pair->id);
+                }
+                if (!edges_for_removal.empty()) {
+                    remove_marked_edges();
+                    ++num_bubbles_popped;
+                }
             }
         }
 
@@ -860,7 +783,7 @@ uint32_t Graph::remove_bubbles() {
     remove_isolated_nodes();
     // if (bubble_candidates.size() != 0) fprintf(stderr, "\n");
 
-    fprintf(stderr, "    popped %d bubbles (out of %zu)\n", num_bubbles_popped, bubble_candidates.size());
+    fprintf(stderr, "    popped %d bubbles\n", num_bubbles_popped);
     fprintf(stderr, "  }\n");
 
     return num_bubbles_popped;
@@ -964,53 +887,70 @@ void Graph::print_contigs() const {
     fprintf(stderr, "  }\n");
 }
 
-void Graph::locate_bubble_sources(std::vector<uint32_t>& dst) {
-
-    // 0 - unmarked, 1 - in que, 2 - marked
-    std::vector<uint8_t> marks(nodes_.size(), false);
-    std::deque<uint32_t> node_que;
-
-    for (const auto& node: nodes_) {
-        if (node == nullptr || marks[node->id] == true) {
-            continue;
+int32_t Graph::find_edge(uint32_t src, uint32_t dst) {
+    for (const auto& edge: nodes_[src]->suffix_edges) {
+        if (edge->end_node->id == dst) {
+            return edge->id;
         }
-        // fprintf(stderr, "Considering node %d as bubble source\r", node->id);
+    }
+    return -1;
+}
 
-        node_que.push_back(node->id);
-        while (!node_que.empty()) {
-            const auto& curr_node = nodes_[node_que.front()];
-            node_que.pop_front();
-            //fprintf(stderr, "%d, %d\n", curr_node->id, marks[curr_node->id]);
+void Graph::find_removable_edges(std::vector<uint32_t>& dst, const std::vector<int32_t>& path,
+    bool chimeric) {
 
-            if (marks[curr_node->id] != 2) {
-                if (curr_node->out_degree() > 1) {
-                    dst.emplace_back(curr_node->id);
-                }
-                marks[curr_node->id] = 2;
-                marks[curr_node->pair->id] = 2;
-
-                for (const auto& edge: curr_node->prefix_edges) {
-                    if (marks[edge->begin_node->id] == 0) {
-                        marks[edge->begin_node->id] = 1;
-                        node_que.push_back(edge->begin_node->id);
-                    }
-                }
-                for (const auto& edge: curr_node->suffix_edges) {
-                    if (marks[edge->end_node->id] == 0) {
-                        marks[edge->end_node->id] = 1;
-                        node_que.push_back(edge->end_node->id);
-                    }
-                }
-            }
+    // find first node with multiple in edges
+    int32_t pref = -1;
+    for (uint32_t i = 1; i < path.size() - 1; ++i) {
+        if (nodes_[path[i]]->in_degree() > 1) {
+            pref = i;
+            break;
+        }
+    }
+    // find last node with multiple out edges
+    int32_t suff = -1;
+    for (uint32_t i = 1; i < path.size() - 1; ++i) {
+        if (nodes_[path[i]]->out_degree() > 1) {
+            suff = i;
         }
     }
 
-    // fprintf(stderr, "\nBubble candidates found (%zu)!\n", dst.size());
-
-    /*for (const auto& it: dst) {
-        fprintf(stderr, "%d ", it);
+    if (pref == -1 && suff == -1) {
+        // remove whole path
+        for (uint32_t i = 0; i < path.size() - 1; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+        return;
     }
-    fprintf(stderr, "\n");*/
+
+    if (pref != -1 && nodes_[path[pref]]->out_degree() > 1) return;
+    if (suff != -1 && nodes_[path[suff]]->in_degree() > 1) return;
+
+    if (pref == -1) {
+        // remove everything after last suff node
+        for (uint32_t i = suff; i < path.size() - 1; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+    } else if (suff == -1) {
+        // remove everything before first pref node
+        for (int32_t i = 0; i < pref; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+    } else if (suff < pref) {
+        // remove everything between last suff and first pref node
+        for (int32_t i = suff; i < pref; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+    } else if (chimeric && suff >= pref && nodes_[path[0]]->in_degree() == 0) {
+        // remove everything after last suff node
+        for (uint32_t i = suff; i < path.size() - 1; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+        // remove everything before first pref node
+        for (int32_t i = 0; i < pref; ++i) {
+            dst.push_back(find_edge(path[i], path[i + 1]));
+        }
+    }
 }
 
 void Graph::remove_marked_edges() {
