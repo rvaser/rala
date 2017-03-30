@@ -27,8 +27,8 @@ constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
  *     larger than a predefined threshold (Li 2016)
  */
 void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
-    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
-    std::shared_ptr<thread_pool::ThreadPool> thread_pool, bool prefilter = true);
+    const std::string& reads_path, const std::string& overlaps_path, const std::string& mappings_path,
+    uint32_t overlap_type, std::shared_ptr<thread_pool::ThreadPool> thread_pool, bool prefilter = true);
 
 /*
  * @brief Chimeric read detection with reference

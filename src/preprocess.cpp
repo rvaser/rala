@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <set>
 
 #include "read.hpp"
 #include "overlap.hpp"
@@ -24,11 +25,12 @@ constexpr uint32_t kMinCoverage = 3;
 constexpr double kMaxOverhangToOverlapRatio = 0.875;
 constexpr double kSlopeRatio = 1.3;
 constexpr uint32_t kSlopeWidth = 500;
-constexpr double kSlopeWidthRatio = 0.03;
+constexpr double kSlopeWidthRatio = 0.05;
 constexpr double kHillWidthRatio = 0.7;
+constexpr double kMedianRatio = 2;
 
 // unmapped reads
-constexpr double kMinMappingPerc = 0.85;
+constexpr double kMinMappingPerc = 0.0;
 
 template<class T>
 void shrinkVector(std::vector<std::shared_ptr<T>>& dst, uint64_t start, const std::vector<bool>& is_valid) {
@@ -105,6 +107,52 @@ uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
     return 4; // b to a overlap
 }
 
+// call before mappings sort!
+void printPileGraph(const std::vector<uint32_t>& mappings, const std::string& path) {
+
+    std::ofstream out(path);
+    for (uint32_t i = 0; i < mappings.size(); i+= 2) {
+        out << (mappings[i] >> 1) << " " << (mappings[i + 1] >> 1) << std::endl;
+    }
+    out.close();
+};
+
+void printCoverageGraph(std::vector<uint32_t>& mappings, const std::string& path, double dataset_median) {
+
+    if (mappings.empty()) {
+        return;
+    }
+    std::sort(mappings.begin(), mappings.end());
+
+    std::vector<uint32_t> coverage_graph((mappings.back() >> 1) + 1, 0);
+    int32_t coverage = 0;
+    uint32_t last_m = 0, total = 0;
+    for (const auto& m: mappings) {
+        if (coverage > 0) {
+            for (uint32_t i = last_m; i < (m >> 1); ++i) {
+                coverage_graph[i] += coverage;
+                total += coverage;
+            }
+        }
+        last_m = m >> 1;
+        if (m & 1){
+            --coverage;
+        } else {
+            ++coverage;
+        }
+    }
+
+    std::vector<uint32_t> tmp(coverage_graph.begin() + (mappings.front()>>1), coverage_graph.end());
+    std::sort(tmp.begin(), tmp.end());
+    double median = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] : (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / (double) 2;
+
+    std::ofstream out(path);
+    for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+        out << i << " " << coverage_graph[i] << " " << 0 << " " << median << " " << dataset_median << std::endl;
+    }
+    out.close();
+}
+
 bool findRegions(std::vector<std::pair<uint32_t, uint32_t>>& valid_regions,
     std::pair<uint32_t, uint32_t>& longest_region, std::vector<uint32_t>& mappings) {
 
@@ -145,7 +193,7 @@ bool findRegions(std::vector<std::pair<uint32_t, uint32_t>>& valid_regions,
 }
 
 void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
-    std::vector<uint32_t>& mappings, uint32_t id, bool print) {
+    std::vector<uint32_t>& mappings, double dataset_median, uint32_t id, bool print) {
 
     if (mappings.empty()) {
         return;
@@ -169,6 +217,10 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
         }
     }
 
+    std::vector<uint32_t> tmp(coverage_graph.begin() + (mappings.front()>>1), coverage_graph.end());
+    std::sort(tmp.begin(), tmp.end());
+    double median = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] : (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / (double) 2;
+
     auto window_add = [](std::deque<std::pair<int32_t, int32_t>>& window,
         int32_t value, int32_t position) -> void {
 
@@ -191,9 +243,10 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
 
-    int32_t k = std::max(kSlopeWidth, uint32_t(kSlopeWidthRatio *
-        ((mappings.back() >> 1) - (mappings.front() >> 1))));
+    int32_t k = std::max(kSlopeWidth, uint32_t(kSlopeWidthRatio * ((mappings.back() >> 1) - (mappings.front() >> 1))));
     int32_t read_length = coverage_graph.size();
+
+    uint32_t beg = mappings.front()>>1, len = (mappings.back()>>1) - (mappings.front()>>1);
 
     for (int32_t i = -1 * k + 2; i < read_length; ++i) {
         if (i < read_length - k) {
@@ -205,17 +258,18 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
             window_add(left_window, coverage_graph[i - 1], i - 1);
             window_update(left_window, i - 1 - k);
 
+            // if (coverage_graph[i - 1] < dataset_median && (i == read_length - 1 || coverage_graph[i + 1] < dataset_median)) continue;
             int32_t current = coverage_graph[i] * kSlopeRatio;
-            if (left_window.front().second > current) {
+            if (coverage_graph[i - 1] > dataset_median && left_window.front().second > dataset_median && left_window.front().second > current) {
                 slopes.push_back(i << 1 | 0);
             }
-            if (!right_window.empty() && right_window.front().second > current) {
+            if ((i == read_length - 1 || coverage_graph[i + 1] > dataset_median) && !right_window.empty() && right_window.front().second > dataset_median && right_window.front().second > current) {
                 slopes.push_back(i << 1 | 1);
             }
         }
     }
 
-    int32_t max_width = ((mappings.back() >> 1) - (mappings.front() >> 1)) * kHillWidthRatio;
+    uint32_t max_width = ((mappings.back() >> 1) - (mappings.front() >> 1)) * kHillWidthRatio;
 
     if (slopes.size() > 2) {
 
@@ -227,8 +281,8 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
 
         std::vector<std::pair<uint32_t, uint32_t>> slope_regions;
 
-        uint32_t slope_width = 2 * k;
-        for (uint32_t s = 1; s < slopes.size(); ++s) {
+        uint32_t slope_width = k; // 2 * k;
+        for (uint32_t s = 0; s < slopes.size(); ++s) {
             if (slopes[s] & 1) {
                 if (found_fus) {
                     if ((slopes[s] >> 1) - fupslope > slope_width) {
@@ -268,37 +322,6 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
         //    fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
         // }
 
-        // trim regions
-        auto trim_left = [&](uint32_t begin, uint32_t end) -> uint32_t {
-            uint32_t value = coverage_graph[begin];
-            while (begin <= end && coverage_graph[begin] == value) {
-                ++begin;
-            }
-            return begin - 1;
-        };
-
-        auto trim_right = [&](uint32_t begin, uint32_t end) -> uint32_t {
-            uint32_t value = coverage_graph[end];
-            while (end >= begin && coverage_graph[end] == value) {
-                --end;
-            }
-            return end + 1;
-        };
-
-        for (auto& region: slope_regions) {
-            if (region.first & 1) { // up slope
-                region.first = (trim_left(region.first >> 1, region.second) << 1) | 1;
-                region.second = trim_right(region.first >> 1, region.second);
-            } else { // downslope
-                region.second = trim_right(region.first >> 1, region.second);
-                region.first = (trim_left(region.first >> 1, region.second) << 1) | 0;
-            }
-        }
-        // fprintf(stderr, "TRIMMED\n");
-        // for (const auto& it: slope_regions) {
-        //    fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
-        //}
-
         // chimeric check - TODO: rerranging slopes does not work all the time
         auto rearrange_slopes = [&](uint32_t i, uint32_t j) -> void {
             uint32_t begin = std::max(slope_regions[i].first >> 1, slope_regions[j].first >> 1);
@@ -333,48 +356,107 @@ void findHills(std::vector<std::pair<uint32_t, uint32_t>>& hills,
                 rearrange_slopes(s, s + 1);
             }
         }
-        //fprintf(stderr, "Chimeric check\n");
-        //for (const auto& it: slope_regions) {
-        //    fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
-        //}
-        //fprintf(stderr, "\n");
+        // fprintf(stderr, "Chimeric check\n");
+        /* for (const auto& it: slope_regions) {
+            fprintf(stderr, "%d (%d %d) \n", it.first & 1, it.first >> 1, it.second);
+        }
+        fprintf(stderr, "\n"); */
 
         std::vector<uint32_t> slope_graph(coverage_graph.size(), 0);
         slopes.clear();
-        for (const auto& region: slope_regions) {
-            if ((region.first >> 1) < (mappings.front() >> 1)) {
-                // slopes.push_back((((region.first >> 1) + region.second) / 2 + 1) << 1 | (region.first & 1));
-                slopes.push_back((region.second + 1) << 1 | 1);
-            } else if (region.second >= (mappings.back() >> 1)) {
-                // slopes.push_back((((region.first >> 1) + region.second) / 2 - 1) << 1 | (region.first & 1));
-                slopes.push_back(((region.first >> 1) - 1) << 1 | 0);
-            } else if (region.first & 1) { // upslope
-                slopes.push_back(region.first);
-            } else { // downslope
-                slopes.push_back(region.second << 1 | 0);
-            }
-        }
 
         // find hills
-        bool has_hill = false;
-        for (uint32_t s = 0; s < slopes.size() - 1; ++s) {
-            if ((slopes[s] & 1) && !(slopes[s + 1] & 1)) {
-                if ((slopes[s + 1] >> 1) - (slopes[s] >> 1) < max_width) {
-                    slope_graph[(slopes[s] >> 1)] = 2;
-                    slope_graph[(slopes[s + 1] >> 1)] = 1;
-                    has_hill = true;
-                    hills.emplace_back(slopes[s] >> 1, slopes[s + 1] >> 1);
+        auto check_hill = [&](uint32_t begin, uint32_t end, double median) -> bool {
+            for (uint32_t i = begin; i < end; ++i) {
+                if (coverage_graph[i] < median) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        for (uint32_t r = 0; r < slope_regions.size() - 1; ++r) {
+            if ((slope_regions[r].first & 1) && !(slope_regions[r + 1].first & 1)) {
+                if (slope_regions[r + 1].second - (slope_regions[r].first >> 1) < max_width) {
+
+                    slope_graph[(slope_regions[r].first >> 1)] = 2;
+                    slope_graph[(slope_regions[r + 1].second)] = 1;
+                    // print = true;
+
+                    // fprintf(stderr, "%d: (%d,%d) - (%d,%d)\n", id, slope_regions[r].first >> 1, slope_regions[r].second,
+                    //    slope_regions[r + 1].first >> 1, slope_regions[r + 1].second);
+
+                    if (check_hill(slope_regions[r].second + 1, (slope_regions[r + 1].first >> 1) - 1, dataset_median) == false) {
+                        continue;
+                    }
+
+                    if ((slope_regions[r].first >> 1) < 0.075 * len + beg) {
+                        // left hill
+                        hills.emplace_back(slope_regions[r].first >> 1, slope_regions[r + 1].second);
+                    } else if (slope_regions[r + 1].second > 0.925 * len + beg) {
+                        // right hill
+                        hills.emplace_back(slope_regions[r].first >> 1, slope_regions[r + 1].second);
+                    }
                 }
             }
         }
 
-        if (has_hill && print) {
+        std::set<uint32_t> special = {}; // {30315, 25972, 12512, 43069, 28793, 27602, 8291, 40019, 22178, 18285, 30224, 30669, 42382, 28437, 2579};
+
+        if (print || special.count(id) != 0) {
             std::ofstream out("graphs/h" + std::to_string(id));
             for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-                out << i << " " << coverage_graph[i] << " " << slope_graph[i] << std::endl;
+                out << i << " " << coverage_graph[i] << " " << slope_graph[i] << " " << median << " " << dataset_median << std::endl;
             }
             out.close();
         }
+    }
+}
+
+void findHillsWithReference(std::vector<std::pair<uint32_t, uint32_t>>& hills,
+    std::vector<uint32_t>& mappings, uint32_t id, bool print) {
+
+    if (mappings.empty()) {
+        return;
+    }
+    std::sort(mappings.begin(), mappings.end());
+
+    std::vector<uint32_t> coverage_graph((mappings.back() >> 1) + 1, 0);
+    int32_t coverage = 0, min_coverage = 2, region_begin = 0;
+    uint32_t last_m = 0;
+    for (const auto& m: mappings) {
+        if (coverage > 0) {
+            for (uint32_t i = last_m; i < (m >> 1); ++i) {
+                coverage_graph[i] += coverage;
+            }
+        }
+        last_m = m >> 1;
+        int32_t old_coverage = coverage;
+        if (m & 1){
+            --coverage;
+        } else {
+            ++coverage;
+        }
+        int32_t pos = m >> 1;
+        if (old_coverage < min_coverage && coverage >= min_coverage) {
+            region_begin = pos;
+        } else if (old_coverage >= min_coverage && coverage < min_coverage) {
+            hills.emplace_back(region_begin, pos);
+        }
+    }
+
+    if (!hills.empty() && print) {
+        std::vector<uint32_t> slope_graph(coverage_graph.size(), 0);
+        for (const auto& it: hills) {
+            slope_graph[it.first] = 2;
+            slope_graph[it.second] = 1;
+        }
+
+        std::ofstream out("graphs/c" + std::to_string(id));
+        for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
+            out << i << " " << coverage_graph[i] << " " << slope_graph[i] << std::endl;
+        }
+        out.close();
     }
 }
 
@@ -438,7 +520,7 @@ bool findPits(std::vector<uint32_t>& mappings, uint32_t id, bool print) {
             deque_add(left_window, coverage_graph[i - 1], i - 1);
             deque_update(left_window, i - 1 - k);
 
-            int32_t current = coverage_graph[i] * 1.75;
+            int32_t current = coverage_graph[i] * 1.817;
             if (left_window.front().second > current) {
                 slopes.push_back(i << 1 | 0);
             }
@@ -452,7 +534,7 @@ bool findPits(std::vector<uint32_t>& mappings, uint32_t id, bool print) {
     if (slopes.size() > 0) {
         std::sort(slopes.begin(), slopes.end());
         for (uint32_t i = 0; i < slopes.size() - 1; ++i) {
-            if (!(slopes[i] & 1) && (slopes[i + 1] & 1)) {
+            if (!(slopes[i] & 1) && (slopes[i + 1] & 1) && (slopes[i + 1] >> 1) - (slopes[i] >> 1) < k) {
                 is_chimeric = true;
                 break;
             }
@@ -460,7 +542,6 @@ bool findPits(std::vector<uint32_t>& mappings, uint32_t id, bool print) {
     }
 
     if (print && is_chimeric) {
-
         std::ofstream out("graphs/c" + std::to_string(id));
         for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
             out << i << " " << coverage_graph[i] << " " <<  0 << std::endl;
@@ -471,47 +552,9 @@ bool findPits(std::vector<uint32_t>& mappings, uint32_t id, bool print) {
     return is_chimeric;
 }
 
-// call before mappings sort!
-void printPileGraph(const std::vector<uint32_t>& mappings, const std::string& path) {
-
-    std::ofstream out(path);
-    for (uint32_t i = 0; i < mappings.size(); i+= 2) {
-        out << (mappings[i] >> 1) << " " << (mappings[i + 1] >> 1) << std::endl;
-    }
-    out.close();
-};
-
-// call after mappings sort!
-void printCoverageGraph(const std::vector<uint32_t>& mappings, const std::string& path) {
-
-    std::vector<uint32_t> coverage_graph((mappings.back() >> 1) + 1, 0);
-    int32_t coverage = 0;
-    uint32_t last_m = 0, total = 0;
-    for (const auto& m: mappings) {
-        if (coverage > 0) {
-            for (uint32_t i = last_m; i < (m >> 1); ++i) {
-                coverage_graph[i] += coverage;
-                total += coverage;
-            }
-        }
-        last_m = m >> 1;
-        if (m & 1){
-            --coverage;
-        } else {
-            ++coverage;
-        }
-    }
-
-    std::ofstream out(path);
-    for (uint32_t i = 0; i < coverage_graph.size(); ++i) {
-        out << i << " " << coverage_graph[i] << " " << 0 << std::endl;
-    }
-    out.close();
-}
-
 void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
-    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
-    std::shared_ptr<thread_pool::ThreadPool> thread_pool, bool prefilter) {
+    const std::string& reads_path, const std::string& overlaps_path, const std::string& mappings_path,
+    uint32_t overlap_type, std::shared_ptr<thread_pool::ThreadPool> thread_pool, bool prefilter) {
 
     fprintf(stderr, "Preprocessing data {\n");
 
@@ -605,19 +648,126 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         fprintf(stderr, "  }\n");
     }
 
-    // find coverage hills which represent repeats or are parts of chimeric reads
-    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> hill_regions(mappings.size());
+    std::vector<double> medians;
+    uint64_t median_sum = 0;
+    std::vector<double> read_medians(mappings.size(), 0);
+    // for (const auto& it: mappings) {
+    for (uint32_t i = 0; i < mappings.size(); ++i) {
+        const auto& it = mappings[i];
+        if (it.empty()) continue;
+        std::vector<uint32_t> coverage_graph((it.back() >> 1) + 1, 0);
+        int32_t coverage = 0;
+        uint32_t last_m = 0;
+        for (const auto& m: it) {
+            if (coverage > 0) {
+                for (uint32_t i = last_m; i < (m >> 1); ++i) {
+                    coverage_graph[i] += coverage;
+                }
+            }
+            last_m = m >> 1;
+            if (m & 1){
+                --coverage;
+            } else {
+                ++coverage;
+            }
+        }
+
+        std::vector<uint32_t> cov(coverage_graph.begin()+(it.front()>>1), coverage_graph.end());
+        if (cov.empty()) {
+            continue;
+        }
+
+        std::sort(cov.begin(), cov.end());
+        double median = cov.size() % 2 == 1 ? cov[cov.size() / 2] : (cov[cov.size() / 2 - 1] + cov[cov.size() / 2]) / (double) 2;
+        medians.push_back(median);
+        median_sum += median;
+        read_medians[i] = median;
+    }
+
+    std::sort(medians.begin(), medians.end());
+    double medians_median = (medians.size() % 2 == 1 ? medians[medians.size() / 2] : (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / (double) 2);
+    fprintf(stderr, "Median of medians %lf\n", medians_median);
+    double average_median = median_sum / (double) medians.size();
+    fprintf(stderr, "Avg median = %lf\n", average_median);
+    medians.clear();
+
+    uint32_t bad_reads = 0;
+    for (uint32_t i = 0; i < mappings.size(); ++i) {
+        if (read_medians[i] * kMedianRatio < medians_median) {
+            std::vector<uint32_t>().swap(mappings[i]);
+            is_valid_read[i] = false;
+            ++bad_reads;
+        }
+    }
+    fprintf(stderr, "Reads with median < median of medians / %lf = %u (out of %zu)\n", kMedianRatio, bad_reads, mappings.size());
+
+    std::vector<uint32_t> specials = {};
+    for (const auto& it: specials) {
+        printCoverageGraph(mappings[it], "graphs/h" + std::to_string(it), average_median);
+    }
+
+    // find chimeric reads
     {
+        std::vector<std::future<bool>> thread_futures;
+        for (uint32_t i = 0; i < mappings.size(); ++i) {
+            thread_futures.emplace_back(thread_pool->submit_task(findPits,
+                std::ref(mappings[i]), i, false));
+        }
+        for (uint32_t i = 0; i < mappings.size(); ++i) {
+            thread_futures[i].wait();
+            if (thread_futures[i].get() == true) {
+                std::vector<uint32_t>().swap(mappings[i]);
+                is_valid_read[i] = false;
+            }
+        }
+    }
+
+    // find coverage hills which represent repeats or are parts of chimeric reads
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> hill_regions;
+    std::vector<uint8_t> read_types(mappings.size());
+    if (mappings_path.empty()) {
+        hill_regions.resize(mappings.size());
         std::vector<std::future<void>> thread_futures;
         for (uint32_t i = 0; i < mappings.size(); ++i) {
             thread_futures.emplace_back(thread_pool->submit_task(findHills,
-                std::ref(hill_regions[i]), std::ref(mappings[i]), i, false));
+                std::ref(hill_regions[i]), std::ref(mappings[i]),
+                average_median, i, false));
         }
         for (uint32_t i = 0; i < mappings.size(); ++i) {
             thread_futures[i].wait();
             std::vector<uint32_t>().swap(mappings[i]);
         }
         std::vector<std::vector<uint32_t>>().swap(mappings);
+    } else {
+        oreader = overlap_type == 0 ?
+            bioparser::createReader<Overlap, bioparser::MhapReader>(mappings_path) :
+            bioparser::createReader<Overlap, bioparser::PafReader>(mappings_path);
+        oreader->read_objects(overlaps, -1);
+
+        std::vector<std::vector<uint32_t>> ref_mappings;
+        for (const auto& it: overlaps) {
+            if (ref_mappings.size() <= it->a_id()) {
+                ref_mappings.resize(it->a_id() + 1);
+            }
+
+            ref_mappings[it->a_id()].push_back(((it->a_rc() ? it->a_length() - it->a_end() : it->a_begin()) + 1) << 1 | 0);
+            ref_mappings[it->a_id()].push_back(((it->a_rc() ? it->a_length() - it->a_begin() : it->a_end()) - 1) << 1 | 1);
+        }
+        overlaps.clear();
+        hill_regions.resize(std::max(ref_mappings.size(), mappings.size()));
+
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < ref_mappings.size(); ++i) {
+            thread_futures.emplace_back(thread_pool->submit_task(findHillsWithReference,
+                std::ref(hill_regions[i]), std::ref(ref_mappings[i]), i, false));
+        }
+        for (uint32_t i = 0; i < ref_mappings.size(); ++i) {
+            thread_futures[i].wait();
+            std::vector<uint32_t>().swap(ref_mappings[i]);
+        }
+        std::vector<std::vector<uint32_t>>().swap(ref_mappings);
+
+        oreader.reset();
     }
 
     // reading valid overlaps into memory
@@ -639,16 +789,23 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 continue;
             }
 
-            uint32_t contained_hills = 0, overlaping_hills = 0;
             if (hill_regions[it->a_id()].size() != 0) {
                 uint32_t begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
                 uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
 
                 for (const auto& h: hill_regions[it->a_id()]) {
-                    if (begin < h.first && end > h.second) {
-                        ++contained_hills;
-                    } else if (!(begin > h.second || end < h.first)) {
-                        ++overlaping_hills;
+                    if (begin < h.second && h.first < end) {
+                        // if (h.second < it->a_length() / 2) {
+                        if (h.first < 0.10 * it->a_length()) {
+                            if (end < h.second) {
+                                is_valid_overlap[it->id()] = false;
+                            }
+                        // } else {
+                        } else if (h.second > 0.9 * it->a_length()) {
+                            if (begin > h.first) {
+                                is_valid_overlap[it->id()] = false;
+                            }
+                        }
                     }
                 }
             }
@@ -658,18 +815,21 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 uint32_t end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
 
                 for (const auto& h: hill_regions[it->b_id()]) {
-                    if (begin < h.first && end > h.second) {
-                        ++contained_hills;
-                    } else if (!(begin > h.second || end < h.first)) {
-                        ++overlaping_hills;
+                    if (begin < h.second && h.first < end) {
+                        // if (h.second < it->b_length() / 2) {
+                        if (h.first < 0.10 * it->b_length()) {
+                            if (end < h.second) {
+                                is_valid_overlap[it->id()] = false;
+                            }
+                        // } else {
+                        } else if (h.second > 0.9 * it->b_length()) {
+                            if (begin > h.first) {
+                                is_valid_overlap[it->id()] = false;
+                            }
+                        }
                     }
                 }
             }
-
-            if (overlaping_hills > 0 && contained_hills == 0) {
-                is_valid_overlap[it->id()] = false;
-            }
-
 
             if (prefilter) {
                 bool is_valid = it->update(
@@ -725,11 +885,11 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
 
     auto rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
 
-    uint32_t trimmed_read_id = 1;
-    std::ofstream trimmed_reads_file;
-    if (prefilter) {
+    // uint32_t trimmed_read_id = 1;
+    // std::ofstream trimmed_reads_file;
+    /*if (prefilter) {
         trimmed_reads_file.open("trimmed_reads.fastq");
-    }
+    }*/
 
     while (true) {
         uint64_t current_read_id = reads.size();
@@ -738,14 +898,14 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         for (uint64_t i = current_read_id; i < reads.size(); ++i) {
             auto& it = reads[i];
             // print valid read regions for later use!
-            if (prefilter && !valid_regions[it->id()].empty()) {
+            /*if (prefilter && !valid_regions[it->id()].empty()) {
                 for (const auto& r: valid_regions[it->id()]) {
                     trimmed_reads_file << "@" << trimmed_read_id++ << std::endl;
                     trimmed_reads_file << it->sequence().substr(r.first, r.second - r.first) << std::endl;
                     trimmed_reads_file << "+" << std::endl;
                     trimmed_reads_file << it->quality().substr(r.first, r.second - r.first) << std::endl;
                 }
-            }
+            }*/
 
             if (it->id() >= is_valid_read.size()) {
                 is_valid_read.resize(it->id() + 1, false);
@@ -766,9 +926,9 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
     }
 
-    if (prefilter) {
+    /*if (prefilter) {
         trimmed_reads_file.close();
-    }
+    }*/
 
     uint64_t num_valid_reads = 0, num_valid_overlaps = 0;
     for (const auto& it: is_valid_read) if (it == true) ++num_valid_reads;
@@ -996,19 +1156,33 @@ void findUncontainedReads(const std::string& reads_path, const std::string& over
     }
     rreader.reset();
 
-    std::vector<bool> is_valid_read(read_lengths.size(), false);
+    std::vector<uint32_t> read_type(read_lengths.size(), 0);
 
     std::vector<std::shared_ptr<Overlap>> overlaps;
     auto oreader = overlap_type == 0 ?
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
         bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
 
+    uint32_t internal = 0, cont = 0, prefsuf = 0;
     while (true) {
         auto status = oreader->read_objects(overlaps, kChunkSize);
 
         for (const auto& it: overlaps) {
-            if (it->a_end() - it->a_begin() >= read_lengths[it->a_id()]) {
-                is_valid_read[it->a_id()] = true;
+            it->set_type(classifyOverlap(it));
+            read_type[it->a_id()] = std::max(read_type[it->a_id()], it->type() + 1);
+            switch (it->type()) {
+                case 0:
+                    ++internal;
+                    break;
+                case 1:
+                case 2:
+                    ++cont;
+                    break;
+                case 3:
+                case 4:
+                default:
+                    ++prefsuf;
+                    break;
             }
         }
 
@@ -1019,17 +1193,20 @@ void findUncontainedReads(const std::string& reads_path, const std::string& over
         }
     }
 
+    fprintf(stderr, "Int = %d, Con = %d, PS = %d\n", internal, cont, prefsuf);
+    uint32_t num_uncontained_reads = 0;
+
     rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path);
     while (true) {
         auto status = rreader->read_objects(reads, kChunkSize);
-        read_lengths.resize(read_lengths.size() + reads.size());
 
         for (const auto& it: reads) {
-            if (is_valid_read[it->id()] == false) {
+            if (read_type[it->id()] == 0 || read_type[it->id()] > 3) {
                 fprintf(stdout, "@%s\n%s\n+\n%s\n",
                     it->name().c_str(),
                     it->sequence().c_str(),
                     it->quality().c_str());
+                ++num_uncontained_reads;
             }
         }
         reads.clear();
@@ -1039,11 +1216,7 @@ void findUncontainedReads(const std::string& reads_path, const std::string& over
         }
     }
 
-    uint32_t num_uncontained_reads = 0;
-    for (const auto& it: is_valid_read) if (it == false) ++num_uncontained_reads;
-
-    fprintf(stderr, "  found %u uncontained reads (out of %lu)\n", num_uncontained_reads,
-        is_valid_read.size());
+    fprintf(stderr, "  found %u uncontained reads (out of %lu)\n", num_uncontained_reads, read_type.size());
     fprintf(stderr, "}\n");
 }
 

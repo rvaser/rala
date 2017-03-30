@@ -14,6 +14,7 @@ int main(int argc, char** argv) {
     std::string reads_path = argc > 2 ? argv[2] : "";
     std::string overlaps_path = argc > 3 ? argv[3] : "";
     uint32_t overlap_type = argc > 4 ? atoi(argv[4]) : 0;
+    std::string mappings_path = argc > 5 ? argv[5] : "";
 
     switch (atoi(argv[1])) {
         case 1:
@@ -34,7 +35,7 @@ int main(int argc, char** argv) {
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    preprocessData(reads, overlaps, reads_path, overlaps_path, overlap_type,
+    preprocessData(reads, overlaps, reads_path, overlaps_path, mappings_path, overlap_type,
         thread_pool);
 
     auto graph = createGraph(reads, overlaps);
@@ -48,7 +49,7 @@ int main(int argc, char** argv) {
         uint32_t num_changes = graph->remove_tips();
         num_changes += graph->remove_chimeras();
         num_changes += graph->remove_bubbles();
-        num_changes += graph->create_unitigs();
+        // num_changes += graph->create_unitigs();
         if (num_changes == 0) {
             break;
         }
@@ -57,7 +58,7 @@ int main(int argc, char** argv) {
     graph->print_csv("layout_graph.csv");
 
     // graph->remove_selected_nodes_and_edges();
-    graph->remove_long_edges();
+    // graph->remove_long_edges();
     while (true) {
         uint32_t num_changes = graph->create_unitigs();
         num_changes += graph->remove_tips();
