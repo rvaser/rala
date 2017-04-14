@@ -35,8 +35,10 @@ int main(int argc, char** argv) {
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    preprocessData(reads, overlaps, reads_path, overlaps_path, mappings_path, overlap_type,
-        thread_pool);
+    std::vector<std::vector<uint32_t>> mappings;
+    double median;
+    preprocessData(reads, overlaps, mappings, median, reads_path, overlaps_path,
+        overlap_type, thread_pool);
 
     auto graph = createGraph(reads, overlaps);
     overlaps.clear();
@@ -45,9 +47,11 @@ int main(int argc, char** argv) {
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
 
+    graph->print_csv("layout_graph.csv");
+
     while (true) {
         uint32_t num_changes = graph->remove_tips();
-        num_changes += graph->remove_chimeras();
+        // num_changes += graph->remove_chimeras();
         num_changes += graph->remove_bubbles();
         // num_changes += graph->create_unitigs();
         if (num_changes == 0) {
@@ -55,10 +59,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    graph->print_csv("layout_graph.csv");
-
     // graph->remove_selected_nodes_and_edges();
-    // graph->remove_long_edges();
+    // graph->print_knots(mappings, median);
+
     while (true) {
         uint32_t num_changes = graph->create_unitigs();
         num_changes += graph->remove_tips();

@@ -25,60 +25,62 @@ public:
 
     ~Graph();
 
-    /*
+    /*!
      * @brief Removes nodes without edges (no information loss)
      */
     void remove_isolated_nodes();
 
-    /*
+    /*!
      * @brief Removes transitive edge (no information loss)
      * (inspired by Myers 1995 & 2005)
      */
     void remove_transitive_edges();
 
-    /*
+    /*!
      * @brief Removes long edges (i.e. small overlaps, possible information loss and graph fragmentation)
      * (Li 2016)
      */
     void remove_long_edges();
 
-    /*
+    /*!
      * @brief Removes nodes which are dead ends in graph
      */
     uint32_t remove_tips();
 
-    /*
+    /*!
      * @brief Removes cycles (possible information loss)
      * (Tarjan 1972)
      */
     void remove_cycles();
 
-    /*
+    /*!
      * @brief Removes chimeric reads based on several graph patterns
      */
     uint32_t remove_chimeras();
 
-    /*
+    /*!
      * @brief Removes bubbles (possible information loss and graph fragmentation)
      */
     uint32_t remove_bubbles();
 
-    /*
+    /*!
      * @brief Creates unitigs by merging chains of overlapping reads
      */
     uint32_t create_unitigs();
 
-    /*
+    /*!
      * @brief Outputs unitigs in FASTA format
      */
     void print_contigs() const;
 
-    /*
+    void print_knots(std::vector<std::vector<uint16_t>>& coverage_graphs, double median) const;
+
+    /*!
      * @brief Prints assembly graph in csv format
      */
     void print_csv(std::string path) const;
 
-    /*
+    /*!
      * @brief Temporary
      */
     void remove_selected_nodes_and_edges();
@@ -95,7 +97,7 @@ private:
 
     int32_t find_edge(uint32_t src, uint32_t dst);
 
-    /*
+    /*!
      * @brief Finds edges in path which if removed do not affect the connectivity
      * of the rest of the graph
      */

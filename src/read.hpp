@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <memory>
 #include <string>
+#include <deque>
 
 #include "bioparser/src/bioparser.hpp"
 
@@ -68,6 +69,97 @@ class Read {
         std::string sequence_;
         std::string quality_;
         std::string rc_;
+};
+
+class ReadInfo;
+std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+
+class ReadInfo {
+    public:
+        ~ReadInfo() {};
+
+        uint64_t id() const {
+            return id_;
+        }
+
+        /*!
+         * @brief Returns begin_ of the valid coverage interval [begin_, end_>
+         */
+        uint32_t begin() const {
+            return begin_;
+        }
+
+        /*!
+         * @brief Returns end_ of the valid coverage interval [begin_, end_>
+         */
+        uint32_t end() const {
+            return end_;
+        }
+
+        uint16_t coverage_median() const {
+            return coverage_median_;
+        }
+
+        const std::vector<uint16_t>& coverage_graph() const {
+            return coverage_graph_;
+        }
+
+        /*!
+         * @brief Returns regions of read which ought to be repetitive in the genome
+         */
+        const std::vector<std::pair<uint32_t, uint32_t>>& coverage_hills() const {
+            return coverage_hills_;
+        }
+
+        /*!
+         * @brief Locates region in coverage_graph_ with values greater or equal to coverage;
+         * updates begin_, end_ and coverage_graph_ accordingly; if there is no such region
+         * (with valid coverage and longer than 500), both begin_ and end_ are set to same
+         * value and coverage_graph_ is deleted (the read is not valid)
+         */
+        void find_valid_region(uint32_t coverage);
+
+        /*!
+         * @brief Locates pits in coverage_graph_ which ought to indicate that the
+         * read is chimeric; if a pit is present, both begin_ and end_ are set to same
+         * value and coverage_graph_ is deleted (the read is not valid)
+         */
+        void find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
+            double slope_width_ratio);
+
+        /*!
+         * @brief Locates regions in coverage_graph_ which ought to be repetitive in the genome
+         * and stores them in coverage_hills_
+         */
+        void find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
+            double slope_width_ratio, double hill_width_ratio, uint32_t dataset_median);
+
+        /*!
+         * @biref Smooths coverage graph with 1D average filter
+         */
+        void smooth_coverage_graph();
+
+        /*!
+         * @brief Print coverage_graph_ in csv format to path
+         */
+        void print_csv(std::string path, uint32_t dataset_median) const;
+
+        friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+
+    private:
+        ReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+        ReadInfo(const ReadInfo&) = delete;
+        const ReadInfo& operator=(const ReadInfo&) = delete;
+
+        static void coverage_window_add(std::deque<std::pair<int32_t, int32_t>>& window, int32_t value, int32_t position);
+        static void coverage_window_update(std::deque<std::pair<int32_t, int32_t>>& window, int32_t position);
+
+        uint64_t id_;
+        uint32_t begin_;
+        uint32_t end_;
+        uint16_t coverage_median_;
+        std::vector<uint16_t> coverage_graph_;
+        std::vector<std::pair<uint32_t, uint32_t>> coverage_hills_;
 };
 
 }

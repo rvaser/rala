@@ -10,6 +10,10 @@
 #include <deque>
 #include <algorithm>
 
+#include <iostream>
+#include <fstream>
+#include <set>
+
 #include "read.hpp"
 #include "overlap.hpp"
 #include "graph.hpp"
@@ -1017,21 +1021,52 @@ void Graph::print_csv(std::string path) const {
     fclose(graph_file);
 }
 
+void Graph::print_knots(std::vector<std::vector<uint16_t>>& coverage_graphs, double median) const {
+
+    /*std::vector<bool> visited(edges_.size(), false);
+
+    for (const auto& node: nodes_) {
+        if (node == nullptr || node->suffix_edges.size() < 2) continue;
+        if (coverage_graphs[node->read_id].empty()) continue;
+
+        std::vector<int16_t> graph1(coverage_graphs[node->read_id]);
+        if (node->id % 2 != 0) std::reverse(graph1.begin(), graph1.end());
+
+        for (const auto& edge: node->suffix_edges) {
+            if (visited[edge->id]) {
+                continue;
+            }
+            visited[edge->id] = true;
+            visited[edge->pair->id] = true;
+
+            uint32_t id = edge->end_node->read_id;
+            if (coverage_graphs[id].empty()) {
+                continue;
+            }
+
+            std::vector<uint32_t> graph2(coverage_graphs[id]);
+            if (edge->end_node->id % 2 != 0) std::reverse(graph2.begin(), graph2.end());
+
+            /* uint32_t len2 = (mappings[id].back() >> 1) - (mappings[id].front() >> 1), beg2 = (mappings[id].front() >> 1);
+
+            std::ofstream out("graphs/e" + std::to_string(edge->id));
+            out << "x " << node->read_id << " " << id << " median diff" << std::endl;
+            for (uint32_t i = 0; i < edge->length + len2; ++i) {
+                uint32_t g1 = (i < graph1.size() ? graph1[i] : 0 ), g2 = (i < edge->length ? 0 : graph2[i - edge->length + beg2]);
+                out << i << " " << g1 << " " << g2 << " " << median << " " << (int32_t) (g1 - g2) << std::endl;
+            }
+            out.close();
+        }
+    }*/
+}
+
 void Graph::remove_selected_nodes_and_edges() {
 
     uint32_t num_chimeras = 0;
+    std::set<uint32_t> selected_nodes = {};
     for (const auto& node: nodes_) {
         if (node == nullptr) continue;
-        if (// scerevisiae ont
-            node->read_id == 6466 || node->read_id == 4923 || node->read_id == 74242 ||
-            node->read_id == 5654 || node->read_id == 58114 || node->read_id == 45102 ||
-            node->read_id == 59780 || node->read_id == 9227 || node->read_id == 76003) {
-
-            // ecoli pacbio
-            //node->read_id == 41549 || node->read_id == 50611 || node->read_id == 62667 ||
-            //node->read_id == 64916 || node->read_id == 65784 || node->read_id == 83480 ||
-            //node->read_id == 85123 || node->read_id == 39991 || node->read_id == 1429) {
-
+        if (selected_nodes.count(node->id) != 0) {
             node->mark = true;
             node->pair->mark = true;
             for (const auto& edge: node->suffix_edges) {
@@ -1053,24 +1088,17 @@ void Graph::remove_selected_nodes_and_edges() {
 
     fprintf(stderr, "Num selected nodes = %u\n", num_chimeras);
 
+    std::set<uint32_t> selected_edges = {};
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        if (// scerevisiae ont
-            edge->id == 79150 || edge->id == 62848 || edge->id == 56114 ||
-            edge->id == 44052 || edge->id == 5675 || edge->id == 2616 ||
-            edge->id == 33196 || edge->id == 76055 || edge->id == 13810 ||
-            edge->id == 67515 || edge->id == 44976 || edge->id == 30040 ||
-            edge->id == 50666 || edge->id == 21391 || edge->id == 103954 ||
-            edge->id == 118028 || edge->id == 26160 || edge->id == 30568 ||
-            edge->id == 57100 || edge->id == 40926 || edge->id == 63575 ||
-            edge->id == 47016 || edge->id == 50620 || edge->id == 27678 ||
-            edge->id == 38658 || edge->id == 27431) {
+        if (selected_edges.count(edge->id) != 0) {
             edge->mark = true;
             edge->pair->mark = true;
             marked_edges_.insert(edge->id);
             marked_edges_.insert(edge->pair->id);
         }
     }
+
     remove_marked_edges();
     remove_isolated_nodes();
 }
