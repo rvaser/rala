@@ -14,6 +14,7 @@
 namespace rala {
 
 class Read;
+class ReadInfo;
 class Overlap;
 
 class Graph;
@@ -73,12 +74,12 @@ public:
      */
     void print_contigs() const;
 
-    void print_knots(std::vector<std::vector<uint16_t>>& coverage_graphs, double median) const;
+    void print_knots(const std::vector<std::shared_ptr<ReadInfo>>& read_infos, double median) const;
 
     /*!
      * @brief Prints assembly graph in csv format
      */
-    void print_csv(std::string path) const;
+    void print_csv(std::string path, const std::vector<std::shared_ptr<ReadInfo>>& read_infos) const;
 
     /*!
      * @brief Temporary

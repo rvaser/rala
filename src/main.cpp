@@ -35,9 +35,9 @@ int main(int argc, char** argv) {
 
     std::vector<std::shared_ptr<Read>> reads;
     std::vector<std::shared_ptr<Overlap>> overlaps;
-    std::vector<std::vector<uint32_t>> mappings;
+    std::vector<std::shared_ptr<ReadInfo>> read_infos;
     double median;
-    preprocessData(reads, overlaps, mappings, median, reads_path, overlaps_path,
+    preprocessData(reads, read_infos, overlaps, median, reads_path, overlaps_path,
         overlap_type, thread_pool);
 
     auto graph = createGraph(reads, overlaps);
@@ -46,8 +46,6 @@ int main(int argc, char** argv) {
 
     graph->remove_isolated_nodes();
     graph->remove_transitive_edges();
-
-    graph->print_csv("layout_graph.csv");
 
     while (true) {
         uint32_t num_changes = graph->remove_tips();
@@ -59,8 +57,10 @@ int main(int argc, char** argv) {
         }
     }
 
+    graph->print_csv("layout_graph.csv", read_infos);
+
     // graph->remove_selected_nodes_and_edges();
-    // graph->print_knots(mappings, median);
+    graph->print_knots(read_infos, median);
 
     while (true) {
         uint32_t num_changes = graph->create_unitigs();

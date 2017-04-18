@@ -72,7 +72,8 @@ class Read {
 };
 
 class ReadInfo;
-std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length,
+    std::vector<uint32_t>& mappings);
 
 class ReadInfo {
     public:
@@ -98,18 +99,26 @@ class ReadInfo {
 
         uint16_t coverage_median() const {
             return coverage_median_;
-        }
+        };
+
+        /*!
+         * @brief Calculates coverage median, call before coverage_median()
+         */
+        void find_coverage_median();
 
         const std::vector<uint16_t>& coverage_graph() const {
             return coverage_graph_;
         }
 
         /*!
-         * @brief Returns regions of read which ought to be repetitive in the genome
+         * @brief Adds new mappings to coverage_graph_
          */
-        const std::vector<std::pair<uint32_t, uint32_t>>& coverage_hills() const {
-            return coverage_hills_;
-        }
+        void update_coverage_graph(std::vector<uint32_t>& mappings);
+
+        /*!
+         * @biref Smooths coverage graph with 1D average filter
+         */
+        void smooth_coverage_graph();
 
         /*!
          * @brief Locates region in coverage_graph_ with values greater or equal to coverage;
@@ -128,6 +137,13 @@ class ReadInfo {
             double slope_width_ratio);
 
         /*!
+         * @brief Returns regions of read which ought to be repetitive in the genome
+         */
+        const std::vector<std::pair<uint32_t, uint32_t>>& coverage_hills() const {
+            return coverage_hills_;
+        }
+
+        /*!
          * @brief Locates regions in coverage_graph_ which ought to be repetitive in the genome
          * and stores them in coverage_hills_
          */
@@ -135,21 +151,19 @@ class ReadInfo {
             double slope_width_ratio, double hill_width_ratio, uint32_t dataset_median);
 
         /*!
-         * @biref Smooths coverage graph with 1D average filter
-         */
-        void smooth_coverage_graph();
-
-        /*!
          * @brief Print coverage_graph_ in csv format to path
          */
         void print_csv(std::string path, uint32_t dataset_median) const;
 
-        friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+        friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length,
+            std::vector<uint32_t>& mappings);
 
     private:
-        ReadInfo(uint64_t id, std::vector<uint32_t>& mappings);
+        ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings);
         ReadInfo(const ReadInfo&) = delete;
         const ReadInfo& operator=(const ReadInfo&) = delete;
+
+        void add_mappings(const std::vector<uint32_t>& mappings);
 
         static void coverage_window_add(std::deque<std::pair<int32_t, int32_t>>& window, int32_t value, int32_t position);
         static void coverage_window_update(std::deque<std::pair<int32_t, int32_t>>& window, int32_t position);

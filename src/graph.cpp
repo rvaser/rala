@@ -999,38 +999,45 @@ void Graph::remove_marked_edges() {
     }*/
 }
 
-void Graph::print_csv(std::string path) const {
+void Graph::print_csv(std::string path, const std::vector<std::shared_ptr<ReadInfo>>& read_infos) const {
 
     auto graph_file = fopen(path.c_str(), "w");
 
     for (const auto& node: nodes_) {
         if (node == nullptr || node->id % 2 == 0) continue;
-        fprintf(graph_file, "%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,0,-\n",
-            node->id, node->length(), node->read_id, node->unitig_size,
-            node->pair->id, node->pair->length(), node->pair->read_id, node->pair->unitig_size);
+        fprintf(graph_file, "%u [%u] {%d} U:%d C:%u,%u [%u] {%d} U:%d C:%u,0,-\n",
+            node->id, node->length(), node->read_id, node->unitig_size, read_infos[node->read_id]->coverage_median(),
+            node->pair->id, node->pair->length(), node->pair->read_id, node->pair->unitig_size, read_infos[node->pair->read_id]->coverage_median());
     }
 
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        fprintf(graph_file, "%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,1,%d %d %g\n",
-            edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size,
-            edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size,
+        fprintf(graph_file, "%u [%u] {%d} U:%d C:%u,%u [%u] {%d} U:%d C:%u,1,%d %d %g\n",
+            edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size, read_infos[edge->begin_node->read_id]->coverage_median(),
+            edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size, read_infos[edge->end_node->read_id]->coverage_median(),
             edge->id, edge->length, edge->quality);
     }
 
     fclose(graph_file);
 }
 
-void Graph::print_knots(std::vector<std::vector<uint16_t>>& coverage_graphs, double median) const {
+void Graph::print_knots(const std::vector<std::shared_ptr<ReadInfo>>& read_infos, double median) const {
 
-    /*std::vector<bool> visited(edges_.size(), false);
+    std::vector<bool> visited(edges_.size(), false);
 
     for (const auto& node: nodes_) {
         if (node == nullptr || node->suffix_edges.size() < 2) continue;
-        if (coverage_graphs[node->read_id].empty()) continue;
+        if (read_infos[node->read_id] == nullptr) continue;
 
-        std::vector<int16_t> graph1(coverage_graphs[node->read_id]);
-        if (node->id % 2 != 0) std::reverse(graph1.begin(), graph1.end());
+        std::vector<uint16_t> graph1(read_infos[node->read_id]->coverage_graph());
+        uint32_t begin1 = read_infos[node->read_id]->begin();
+        uint32_t end1 = read_infos[node->read_id]->end();
+        if (node->id % 2 != 0) {
+            std::reverse(graph1.begin(), graph1.end());
+            uint32_t tmp = begin1;
+            begin1 = graph1.size() - end1;
+            end1 = graph1.size() - tmp;
+        }
 
         for (const auto& edge: node->suffix_edges) {
             if (visited[edge->id]) {
@@ -1040,24 +1047,29 @@ void Graph::print_knots(std::vector<std::vector<uint16_t>>& coverage_graphs, dou
             visited[edge->pair->id] = true;
 
             uint32_t id = edge->end_node->read_id;
-            if (coverage_graphs[id].empty()) {
+            if (read_infos[id] == nullptr) {
                 continue;
             }
 
-            std::vector<uint32_t> graph2(coverage_graphs[id]);
-            if (edge->end_node->id % 2 != 0) std::reverse(graph2.begin(), graph2.end());
-
-            /* uint32_t len2 = (mappings[id].back() >> 1) - (mappings[id].front() >> 1), beg2 = (mappings[id].front() >> 1);
+            std::vector<uint16_t> graph2(read_infos[id]->coverage_graph());
+            uint32_t begin2 = read_infos[id]->begin();
+            uint32_t end2 = read_infos[id]->end();
+            if (edge->end_node->id % 2 != 0) {
+                std::reverse(graph2.begin(), graph2.end());
+                uint32_t tmp = begin2;
+                begin2 = graph2.size() - end2;
+                end2 = graph2.size() - tmp;
+            }
 
             std::ofstream out("graphs/e" + std::to_string(edge->id));
             out << "x " << node->read_id << " " << id << " median diff" << std::endl;
-            for (uint32_t i = 0; i < edge->length + len2; ++i) {
-                uint32_t g1 = (i < graph1.size() ? graph1[i] : 0 ), g2 = (i < edge->length ? 0 : graph2[i - edge->length + beg2]);
+            for (uint32_t i = 0; i < begin1 + edge->length + (end2 - begin2); ++i) {
+                uint32_t g1 = (i < graph1.size() ? graph1[i] : 0 ), g2 = (i < begin1 + edge->length ? 0 : graph2[i - (edge->length + begin1) + begin2]);
                 out << i << " " << g1 << " " << g2 << " " << median << " " << (int32_t) (g1 - g2) << std::endl;
             }
             out.close();
         }
-    }*/
+    }
 }
 
 void Graph::remove_selected_nodes_and_edges() {

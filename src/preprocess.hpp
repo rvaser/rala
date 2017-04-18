@@ -24,8 +24,8 @@ class Overlap;
  * finds contiguos regions in reads which have coverage larger than a predefined
  * threshold (Li 2016)
  */
-void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<Overlap>>& overlaps,
-    std::vector<std::vector<uint32_t>>& mappings, double& median, const std::string& reads_path,
+void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<ReadInfo>>& read_infos,
+    std::vector<std::shared_ptr<Overlap>>& overlaps, double& median, const std::string& reads_path,
     const std::string& overlaps_path, uint32_t overlap_type,
     std::shared_ptr<thread_pool::ThreadPool> thread_pool);
 

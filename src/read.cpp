@@ -67,17 +67,30 @@ void Read::create_rc() {
     }
 }
 
-std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, std::vector<uint32_t>& mappings) {
-    return mappings.empty() ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(id, mappings));
+std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings) {
+    return mappings.empty() ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(id, read_length, mappings));
 }
 
-ReadInfo::ReadInfo(uint64_t id, std::vector<uint32_t>& mappings)
-        : id_(id), begin_(), end_(), coverage_median_(), coverage_graph_(), coverage_hills_() {
+ReadInfo::ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings)
+        : id_(id), begin_(0), end_(read_length), coverage_median_(0),
+        coverage_graph_(read_length + 1, 0), coverage_hills_() {
 
+    update_coverage_graph(mappings);
+}
+
+void ReadInfo::find_coverage_median() {
+
+    std::vector<uint16_t> tmp(coverage_graph_);
+    std::sort(tmp.begin(), tmp.end());
+    coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] : (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
+}
+
+void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
+
+    if (mappings.empty()) {
+        return;
+    }
     std::sort(mappings.begin(), mappings.end());
-    begin_ = mappings.front() >> 1;
-    end_ = mappings.back() >> 1;
-    coverage_graph_.resize(end_ + 1, 0);
 
     uint16_t coverage = 0;
     uint32_t last_map = 0;
@@ -94,10 +107,6 @@ ReadInfo::ReadInfo(uint64_t id, std::vector<uint32_t>& mappings)
             ++coverage;
         }
     }
-
-    std::vector<uint16_t> tmp(coverage_graph_);
-    std::sort(tmp.begin(), tmp.end());
-    coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] : (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
 }
 
 void ReadInfo::find_valid_region(uint32_t coverage) {
