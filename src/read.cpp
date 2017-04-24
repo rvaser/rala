@@ -71,6 +71,10 @@ std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length, std:
     return mappings.empty() ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(id, read_length, mappings));
 }
 
+std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info) {
+    return read_info == nullptr ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(*read_info));
+}
+
 ReadInfo::ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings)
         : id_(id), begin_(0), end_(read_length), coverage_median_(0),
         coverage_graph_(read_length + 1, 0), coverage_hills_() {
@@ -105,6 +109,69 @@ void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
             --coverage;
         } else {
             ++coverage;
+        }
+    }
+}
+
+void ReadInfo::smooth_coverage_graph() {
+
+    if (coverage_graph_.empty()) {
+        return;
+    }
+
+    std::vector<uint16_t> new_coverage_graph(coverage_graph_.size(), 0);
+
+    uint32_t k = 0.025 * coverage_graph_.size();
+    std::deque<uint32_t> window(k, 0);
+    window.insert(window.end(), coverage_graph_.begin(), coverage_graph_.begin() + k);
+
+    uint32_t window_sum = 0;
+    for (const auto& it: window) {
+        window_sum += it;
+    }
+
+    for (uint32_t i = 0; i < coverage_graph_.size(); ++i) {
+        if (i < coverage_graph_.size() - k) {
+            window.emplace_back(coverage_graph_[i + k]);
+            window_sum += window.back();
+        } else {
+            window.emplace_back(0);
+        }
+        new_coverage_graph[i] = window_sum / (2 * k + 1);
+
+        window_sum -= window.front();
+        window.pop_front();
+    }
+
+    coverage_graph_.swap(new_coverage_graph);
+}
+
+void ReadInfo::correct_coverage_graph(uint32_t region_begin, uint32_t region_end,
+    std::shared_ptr<ReadInfo> other, uint32_t other_region_begin,
+    uint32_t other_region_end, bool rc) {
+
+    assert(this->begin_ <= region_begin && region_begin < this->end_);
+    assert(this->begin_ < region_end && region_end <= this->end_);
+    assert(other->begin_ <= other_region_begin && other_region_begin < other->end_);
+    assert(other->begin_ < other_region_end && other_region_end <= other->end_);
+
+    uint32_t region_length = std::min(region_end - region_begin,
+        other_region_end - other_region_begin);
+    if (abs((region_end - region_begin) - (other_region_end - other_region_begin)) / (double) region_length > 0.01) {
+        return;
+    }
+
+    other_region_end = other_region_begin + region_length;
+
+    for (uint32_t i = 0; i < region_length; ++i) {
+        if (rc == false) {
+            this->coverage_graph_[region_begin + i] = std::max(
+                this->coverage_graph_[region_begin + i],
+                other->coverage_graph_[other_region_begin + i]);
+        } else {
+            this->coverage_graph_[region_begin + i] = std::max(
+                this->coverage_graph_[region_begin + i],
+                other->coverage_graph_[other_region_end - i - 1]);
         }
     }
 }
@@ -163,10 +230,10 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
     std::vector<int32_t> slopes;
 
     int32_t k = std::max(min_slope_width, uint32_t(slope_width_ratio * (end_ - begin_)));
-    int32_t length = coverage_graph_.size();
+    int32_t read_length = coverage_graph_.size();
 
-    for (int32_t i = -1 * k + 2; i < length - 1; ++i) {
-        if (i < length - k) {
+    for (int32_t i = -1 * k + 2; i < read_length - 1; ++i) {
+        if (i < read_length - k) {
             coverage_window_add(right_window, coverage_graph_[i + k], i + k);
         }
         coverage_window_update(right_window, i);
@@ -205,6 +272,8 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
     if (coverage_graph_.empty()) {
         return;
     }
+
+    // dataset_median = std::max(dataset_median, (uint32_t) coverage_median_);
 
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
@@ -323,27 +392,27 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
         }
         fprintf(stderr, "\n"); */
 
-        // find hills
+        // find hills TODO: better checker is needed
         auto check_hill = [&](uint32_t begin, uint32_t end, double median) -> bool {
-            uint32_t max_border_value = std::max(coverage_graph_[begin], coverage_graph_[end]);
             uint32_t valid_bases = 0;
             for (uint32_t i = begin; i < end; ++i) {
-                if (coverage_graph_[i] >= max_border_value) {
+                if (coverage_graph_[i] >= median) {
                     ++valid_bases;
                 }
             }
-            if (valid_bases > 0.8 * (end - begin)) {
+            if (valid_bases > 0.85 * (end - begin)) {
                 return true;
             }
             return false;
         };
 
-        uint32_t max_width = coverage_graph_.size() * hill_width_ratio;
+        bool print = false;
+        uint32_t max_width = (end_ - begin_) * hill_width_ratio;
         for (uint32_t r = 0; r < slope_regions.size() - 1; ++r) {
             if ((slope_regions[r].first & 1) && !(slope_regions[r + 1].first & 1)) {
                 if (slope_regions[r + 1].second - (slope_regions[r].first >> 1) < max_width) {
 
-                    // fprintf(stderr, "%d: (%d,%d) - (%d,%d)\n", id, slope_regions[r].first >> 1, slope_regions[r].second,
+                    //fprintf(stderr, "%d: (%d,%d) - (%d,%d)\n", id_, slope_regions[r].first >> 1, slope_regions[r].second,
                     //    slope_regions[r + 1].first >> 1, slope_regions[r + 1].second);
 
                     if (check_hill(slope_regions[r].second + 1, (slope_regions[r + 1].first >> 1) - 1, dataset_median) == false) {
@@ -363,39 +432,6 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
     }
 }
 
-void ReadInfo::smooth_coverage_graph() {
-
-    if (coverage_graph_.empty()) {
-        return;
-    }
-
-    std::vector<uint16_t> new_coverage_graph(coverage_graph_.size(), 0);
-
-    uint32_t k = 0.025 * coverage_graph_.size();
-    std::deque<uint32_t> window(k, 0);
-    window.insert(window.end(), coverage_graph_.begin(), coverage_graph_.begin() + k);
-
-    uint32_t window_sum = 0;
-    for (const auto& it: window) {
-        window_sum += it;
-    }
-
-    for (uint32_t i = 0; i < coverage_graph_.size(); ++i) {
-        if (i < coverage_graph_.size() - k) {
-            window.emplace_back(coverage_graph_[i + k]);
-            window_sum += window.back();
-        } else {
-            window.emplace_back(0);
-        }
-        new_coverage_graph[i] = window_sum / (2 * k + 1);
-
-        window_sum -= window.front();
-        window.pop_front();
-    }
-
-    coverage_graph_.swap(new_coverage_graph);
-}
-
 void ReadInfo::print_csv(std::string path, uint32_t dataset_median) const {
 
     if (coverage_graph_.empty()) {
@@ -410,7 +446,7 @@ void ReadInfo::print_csv(std::string path, uint32_t dataset_median) const {
 
     std::ofstream out(path);
     for (uint32_t i = 0; i < coverage_graph_.size(); ++i) {
-        out << i << " " << coverage_graph_[i] << " " << slope_graph[i] << " " << coverage_median_ << " " << dataset_median << std::endl;
+        out << i << " " << coverage_graph_[i] << " " << (uint16_t) slope_graph[i] << " " << coverage_median_ << " " << dataset_median << std::endl;
     }
     out.close();
 }

@@ -75,6 +75,8 @@ class ReadInfo;
 std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length,
     std::vector<uint32_t>& mappings);
 
+std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info);
+
 class ReadInfo {
     public:
         ~ReadInfo() {};
@@ -121,6 +123,13 @@ class ReadInfo {
         void smooth_coverage_graph();
 
         /*!
+         * @brief Correct coverage graph with other graph over overlapping region
+         */
+        void correct_coverage_graph(uint32_t region_begin, uint32_t region_end,
+            std::shared_ptr<ReadInfo> other, uint32_t other_region_begin,
+            uint32_t other_region_end, bool rc);
+
+        /*!
          * @brief Locates region in coverage_graph_ with values greater or equal to coverage;
          * updates begin_, end_ and coverage_graph_ accordingly; if there is no such region
          * (with valid coverage and longer than 500), both begin_ and end_ are set to same
@@ -158,12 +167,12 @@ class ReadInfo {
         friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length,
             std::vector<uint32_t>& mappings);
 
+        friend std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info);
+
     private:
         ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings);
-        ReadInfo(const ReadInfo&) = delete;
+        ReadInfo(const ReadInfo&) = default;
         const ReadInfo& operator=(const ReadInfo&) = delete;
-
-        void add_mappings(const std::vector<uint32_t>& mappings);
 
         static void coverage_window_add(std::deque<std::pair<int32_t, int32_t>>& window, int32_t value, int32_t position);
         static void coverage_window_update(std::deque<std::pair<int32_t, int32_t>>& window, int32_t position);

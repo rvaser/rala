@@ -107,86 +107,9 @@ uint32_t classifyOverlap(const std::shared_ptr<Overlap>& overlap) {
     return 4; // b to a overlap
 }
 
-void printOverlapGraph(std::vector<uint32_t>& mappings_a, std::vector<uint32_t>& mappings_b,
-    std::shared_ptr<Overlap> ovl, double dataset_median) {
-
-    if (mappings_a.empty() || mappings_b.empty()) {
-        return;
-    }
-    std::sort(mappings_a.begin(), mappings_a.end());
-    std::sort(mappings_b.begin(), mappings_b.end());
-
-    uint32_t a_begin = ovl->a_rc() ? ovl->a_length() - ovl->a_end() : ovl->a_begin();
-    uint32_t a_end = ovl->a_rc() ? ovl->a_length() - ovl->a_begin() : ovl->a_end();
-    uint32_t b_begin = ovl->b_rc() ? ovl->b_length() - ovl->b_end() : ovl->b_begin();
-    uint32_t b_end = ovl->b_rc() ? ovl->b_length() - ovl->b_begin() : ovl->b_end();
-
-    uint32_t length = std::min(a_end - a_begin, b_end - b_begin);
-
-    std::vector<uint32_t> covg_a(length, 0);
-    int32_t coverage = 0;
-    uint32_t last_m = 0;
-    for (const auto& m: mappings_a) {
-        if (coverage > 0) {
-            for (uint32_t i = last_m; i < (m >> 1); ++i) {
-                if (i >= a_begin && i < a_begin + length) {
-                    covg_a[i - a_begin] += coverage;
-                }
-            }
-        }
-        last_m = m >> 1;
-        if (m & 1){
-            --coverage;
-        } else {
-            ++coverage;
-        }
-    }
-    if (ovl->a_rc()) std::reverse(covg_a.begin(), covg_a.end());
-
-    std::vector<uint32_t> covg_b(length, 0);
-    coverage = 0, last_m = 0;
-    for (const auto& m: mappings_b) {
-        if (coverage > 0) {
-            for (uint32_t i = last_m; i < (m >> 1); ++i) {
-                if (i >= b_begin && i < b_begin + length) {
-                    covg_b[i - b_begin] += coverage;
-                }
-            }
-        }
-        last_m = m >> 1;
-        if (m & 1){
-            --coverage;
-        } else {
-            ++coverage;
-        }
-    }
-    if (ovl->b_rc()) std::reverse(covg_b.begin(), covg_b.end());
-
-    uint32_t difference = 0;
-    std::vector<uint32_t> differences;
-    for (uint32_t i = 0; i < length; ++i) {
-        differences.push_back(abs(covg_a[i] - covg_b[i]));
-        difference += differences.back();
-    }
-    std::sort(differences.begin(), differences.end());
-    double median = length % 2 == 1 ? differences[length / 2] : (differences[length / 2 - 1] + differences[length / 2]) / (double) 2;
-    double average = difference / (double) length;
-
-    fprintf(stderr, "Overlap %lu has avg difference in cov = %lf, median = %lf\n", ovl->id(), average, median);
-
-    /* std::ofstream out("graphs/e" + std::to_string(ovl->id()));
-    out << "x " << ovl->a_id() << " " << ovl->b_id() << " median diff" << std::endl;
-    for (uint32_t i = 0; i < length; ++i) {
-        out << i << " " << covg_a[i] << " " << covg_b[i] << " " << dataset_median << " " << (int32_t) (covg_a[i] - covg_b[i]) << std::endl;
-    }
-    out.close();*/
-
-    // ovl->set_quality(-1 * median);
-}
-
 void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::shared_ptr<ReadInfo>>& read_infos,
-    std::vector<std::shared_ptr<Overlap>>& overlaps, double& median, const std::string& reads_path,
-    const std::string& overlaps_path, uint32_t overlap_type,
+    std::vector<std::shared_ptr<Overlap>>& overlaps, double& dataset_coverage_median,
+    const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
     std::shared_ptr<thread_pool::ThreadPool> thread_pool) {
 
     fprintf(stderr, "Preprocessing data {\n");
@@ -202,6 +125,9 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     auto oreader = overlap_type == 0 ?
         bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
         bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
+
+    std::vector<std::shared_ptr<Overlap>> overlaps_of_spec;
+    uint32_t spec = 70133;
 
     while (true) {
         auto status = oreader->read_objects(overlaps, kChunkSize);
@@ -234,6 +160,8 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
                     if (is_valid_overlap[current_overlaps[i]->id()]) {
                         const auto& valid_overlap = current_overlaps[i];
+
+                        if (valid_overlap->a_id() == spec || valid_overlap->b_id() == spec) overlaps_of_spec.push_back(valid_overlap);
 
                         mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_end() : valid_overlap->a_begin()) + 1) << 1 | 0);
                         mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_begin() : valid_overlap->a_end()) - 1) << 1 | 1);
@@ -296,74 +224,72 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     oreader.reset();
     std::vector<std::vector<uint32_t>>().swap(mappings);
 
+    // print overlaps of spec together
+    /*{
+        std::vector<std::vector<uint16_t>> coverage_graphs;
+        coverage_graphs.push_back(read_infos[spec]->coverage_graph());
+        for (const auto& it: overlaps_of_spec) {
+            if (read_infos[it->a_id()] == nullptr || read_infos[it->b_id()] == nullptr) continue;
+
+            uint32_t a_begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
+            uint32_t a_end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
+            uint32_t b_begin = it->b_rc() ? it->b_length() - it->b_end() : it->b_begin();
+            uint32_t b_end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
+
+            uint32_t len = std::min(b_end - b_begin, a_end - a_begin);
+            if (abs((a_end - a_begin) - (b_end - b_begin)) / (double) len > 0.01) continue;
+
+            coverage_graphs.push_back(std::vector<uint16_t>(coverage_graphs.front().size(), 0));
+            bool rc = it->a_rc() || it->b_rc();
+
+            if (it->a_id() == spec) {
+                std::vector<uint16_t> cg(read_infos[it->b_id()]->coverage_graph());
+                for (uint32_t i = 0; i < len; ++i) {
+                    if (rc == false) {
+                        coverage_graphs.back()[a_begin + i] = cg[b_begin + i];
+                    } else {
+                        coverage_graphs.back()[a_begin + i] = cg[b_begin + len - 1 - i];
+                    }
+                }
+
+            } else {
+                std::vector<uint16_t> cg(read_infos[it->a_id()]->coverage_graph());
+                for (uint32_t i = 0; i < len; ++i) {
+                    if (rc == false) {
+                        coverage_graphs.back()[b_begin + i] = cg[a_begin + i];
+                    } else {
+                        coverage_graphs.back()[b_begin + i] = cg[a_begin + len - 1 - i];
+                    }
+                }
+            }
+        }
+        fprintf(stderr, "%d\n", coverage_graphs.size());
+        std::ofstream out("graphs/h" + std::to_string(spec));
+        for (uint32_t i = 0; i < coverage_graphs.front().size(); ++i) {
+            out << i;
+            for (uint32_t j = 0; j < coverage_graphs.size(); ++j) {
+                out << " " << coverage_graphs[j][i];
+            }
+            out << std::endl;
+        }
+        out.close();
+    }
+    exit(1);*/
+
     fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
     fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
 
-    // find coverage median and filter reads according to it
+    // find longest contiguous read region which has coverage larger than kMinCoverage
     std::vector<bool> is_valid_read(read_infos.size(), true);
-    uint16_t median_of_medians = 0, average_median = 0;
-    uint32_t num_prefiltered_reads = 0, num_low_median_reads = 0;
     {
+        fprintf(stderr, "  Prefiltering data {\n");
+
+        uint32_t num_prefiltered_reads = 0;
         std::vector<std::future<void>> thread_futures;
-        for (uint32_t i = 0; i < read_infos.size(); ++i) {
-            if (read_infos[i] == nullptr) {
-                continue;
-            }
-
-            thread_futures.emplace_back(thread_pool->submit_task(
-                [&](uint32_t id) { read_infos[id]->find_coverage_median(); }, i));
-        }
-
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-
-        std::vector<uint16_t> medians;
-        uint32_t median_sum = 0;
         for (uint32_t i = 0; i < read_infos.size(); ++i) {
             if (read_infos[i] == nullptr) {
                 is_valid_read[i] = false;
                 ++num_prefiltered_reads;
-                continue;
-            }
-
-            medians.emplace_back(read_infos[i]->coverage_median());
-            median_sum += medians.back();
-        }
-
-        std::sort(medians.begin(), medians.end());
-        median_of_medians = medians.size() % 2 == 1 ? medians[medians.size() / 2] :
-            (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
-        average_median = median_sum / medians.size();
-
-        fprintf(stderr, "   (median of coverage medians = %u)\n", median_of_medians);
-        fprintf(stderr, "   (average of coverage medians = %u)\n", average_median);
-
-        for (uint32_t i = 0; i < read_infos.size(); ++i) {
-            if (read_infos[i] == nullptr) {
-                continue;
-            }
-
-            if (read_infos[i]->coverage_median() * kMedianRatio < median_of_medians) {
-                read_infos[i].reset();
-                is_valid_read[i] = false;
-                ++num_low_median_reads;
-            }
-        }
-
-        fprintf(stderr, "  number of reads with coverage median < %u / %.3lf = %u\n",
-            median_of_medians, kMedianRatio, num_low_median_reads);
-    }
-
-    median = average_median;
-
-    // find longest contiguous read region which has coverage larger than kMinCoverage
-    {
-        fprintf(stderr, "  Prefiltering data {\n");
-
-        std::vector<std::future<void>> thread_futures;
-        for (uint32_t i = 0; i < read_infos.size(); ++i) {
-            if (read_infos[i] == nullptr) {
                 continue;
             }
 
@@ -378,22 +304,16 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             if (read_infos[i] == nullptr) {
                 continue;
             }
+
             if (read_infos[i]->coverage_graph().empty()) {
                 read_infos[i].reset();
                 is_valid_read[i] = false;
                 ++num_prefiltered_reads;
             }
         }
+
         fprintf(stderr, "    number of prefiltered reads = %u\n", num_prefiltered_reads);
         fprintf(stderr, "  }\n");
-    }
-
-    std::vector<uint32_t> specials = {};
-    for (const auto& id: specials) {
-        if (read_infos[id] == nullptr) {
-            continue;
-        }
-        read_infos[id]->print_csv("graphs/h" + std::to_string(id), average_median);
     }
 
     // find chimeric reads by looking for tight coverage pits
@@ -425,6 +345,140 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         fprintf(stderr, "  number of chimeric reads = %u\n", num_chimeric_reads);
     }
 
+    // correct coverage graphs
+    {
+        std::vector<std::shared_ptr<ReadInfo>> copies;
+        for (const auto& it: read_infos) {
+            copies.emplace_back(std::move(copyReadInfo(it)));
+        }
+
+        oreader = overlap_type == 0 ?
+            bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_path) :
+            bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_path);
+
+        while (true) {
+            auto status = oreader->read_objects(overlaps, kChunkSize);
+
+            for (const auto& it: overlaps) {
+                if (!is_valid_overlap[it->id()] || !is_valid_read[it->a_id()] || !is_valid_read[it->b_id()]) {
+                    continue;
+                }
+
+                bool is_valid = it->update(
+                    read_infos[it->a_id()]->begin(),
+                    read_infos[it->a_id()]->end(),
+                    read_infos[it->b_id()]->begin(),
+                    read_infos[it->b_id()]->end()
+                );
+
+                if (is_valid) {
+                    uint32_t a_begin = it->a_begin() + (it->a_rc() ? read_infos[it->a_id()]->coverage_graph().size() - 1 - read_infos[it->a_id()]->end() : read_infos[it->a_id()]->begin());
+                    uint32_t a_end = it->a_end() + (it->a_rc() ? read_infos[it->a_id()]->coverage_graph().size() - 1 -read_infos[it->a_id()]->end() : read_infos[it->a_id()]->begin());
+                    if (it->a_rc()) {
+                        auto tmp = a_begin;
+                        a_begin = read_infos[it->a_id()]->coverage_graph().size() - 1 - a_end;
+                        a_end = read_infos[it->a_id()]->coverage_graph().size() - 1 - tmp;
+                    }
+                    uint32_t b_begin = it->b_begin() + (it->b_rc() ? read_infos[it->b_id()]->coverage_graph().size() - 1 -read_infos[it->b_id()]->end() : read_infos[it->b_id()]->begin());
+                    uint32_t b_end = it->b_end() + (it->b_rc() ? read_infos[it->b_id()]->coverage_graph().size() - 1 - read_infos[it->b_id()]->end() : read_infos[it->b_id()]->begin());
+                    if (it->b_rc()) {
+                        auto tmp = b_begin;
+                        b_begin = read_infos[it->b_id()]->coverage_graph().size() - 1 - b_end;
+                        b_end = read_infos[it->b_id()]->coverage_graph().size() - 1 - tmp;
+                    }
+
+                    copies[it->a_id()]->correct_coverage_graph(a_begin, a_end, read_infos[it->b_id()],
+                        b_begin, b_end, it->a_rc() || it->b_rc());
+                    copies[it->b_id()]->correct_coverage_graph(b_begin, b_end, read_infos[it->a_id()],
+                        a_begin, a_end, it->a_rc() || it->b_rc());
+                }
+            }
+
+            overlaps.clear();
+
+            if (status == false) {
+                break;
+            }
+        }
+
+        for (uint32_t i = 0; i < copies.size(); ++i) {
+            copies[i].swap(read_infos[i]);
+        }
+
+        oreader.reset();
+    }
+
+    // find coverage median and filter reads according to it
+    {
+        uint16_t median_of_medians = 0, average_median = 0;
+        uint32_t num_low_median_reads = 0;
+
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool->submit_task(
+                [&](uint32_t id) { read_infos[id]->find_coverage_median(); }, i));
+        }
+
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+
+        std::vector<uint16_t> medians;
+        uint32_t median_sum = 0;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            medians.emplace_back(read_infos[i]->coverage_median());
+            median_sum += medians.back();
+        }
+
+        std::sort(medians.begin(), medians.end());
+        median_of_medians = medians.size() % 2 == 1 ? medians[medians.size() / 2] :
+            (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
+        average_median = median_sum / medians.size();
+
+        fprintf(stderr, "  (median/average of coverage medians = %u/%u)\n", median_of_medians, average_median);
+
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            if (read_infos[i]->coverage_median() * kMedianRatio < median_of_medians) {
+                read_infos[i].reset();
+                is_valid_read[i] = false;
+                ++num_low_median_reads;
+            }
+        }
+
+        fprintf(stderr, "  number of reads with coverage median < %u / %.3lf = %u\n",
+            median_of_medians, kMedianRatio, num_low_median_reads);
+
+        dataset_coverage_median = median_of_medians;
+    }
+
+    // smooth coverage graphs
+    {
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool->submit_task(
+                [&](uint32_t id) { read_infos[id]->smooth_coverage_graph(); }, i));
+        }
+        for (auto& it: thread_futures) {
+            it.wait();
+        }
+    }
+
     // find coverage hills which represent repetitive regions
     {
         std::vector<std::future<void>> thread_futures;
@@ -434,11 +488,19 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             }
 
             thread_futures.emplace_back(thread_pool->submit_task(
-                [&](uint32_t id) { read_infos[id]->find_coverage_hills(kSlopeRatio, kSlopeWidth, kSlopeWidthRatio, kHillWidthRatio, median_of_medians); }, i));
+                [&](uint32_t id) { read_infos[id]->find_coverage_hills(kSlopeRatio, kSlopeWidth, kSlopeWidthRatio, kHillWidthRatio, dataset_coverage_median); }, i));
         }
         for (auto& it: thread_futures) {
             it.wait();
         }
+    }
+
+    std::vector<uint32_t> specials = {};
+    for (const auto& id: specials) {
+        if (read_infos[id] == nullptr) {
+            continue;
+        }
+        read_infos[id]->print_csv("graphs/h" + std::to_string(id), dataset_coverage_median);
     }
 
     // reading valid overlaps into memory
@@ -460,21 +522,19 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 continue;
             }
 
-            // printOverlapGraph(mappings[it->a_id()], mappings[it->b_id()], it, median);
-
-            /*if (hill_regions[it->a_id()].size() != 0) {
+            if (read_infos[it->a_id()]->coverage_hills().size() != 0) {
                 uint32_t begin = it->a_rc() ? it->a_length() - it->a_end() : it->a_begin();
                 uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
 
-                for (const auto& h: hill_regions[it->a_id()]) {
+                uint32_t valid_read_length = read_infos[it->a_id()]->end() - read_infos[it->a_id()]->begin();
+
+                for (const auto& h: read_infos[it->a_id()]->coverage_hills()) {
                     if (begin < h.second && h.first < end) {
-                        // if (h.second < it->a_length() / 2) {
-                        if (h.first < 0.10 * it->a_length()) {
+                        if (h.first < 0.10 * valid_read_length + read_infos[it->a_id()]->begin()) {
                             if (end < h.second) {
                                 is_valid_overlap[it->id()] = false;
                             }
-                        // } else {
-                        } else if (h.second > 0.9 * it->a_length()) {
+                        } else if (h.second > 0.9 * valid_read_length + read_infos[it->a_id()]->begin()) {
                             if (begin > h.first) {
                                 is_valid_overlap[it->id()] = false;
                             }
@@ -483,26 +543,26 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 }
             }
 
-            if (hill_regions[it->b_id()].size() != 0) {
+            if (read_infos[it->b_id()]->coverage_hills().size() != 0) {
                 uint32_t begin = it->b_rc() ? it->b_length() - it->b_end() : it->b_begin();
                 uint32_t end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
 
-                for (const auto& h: hill_regions[it->b_id()]) {
+                uint32_t valid_read_length = read_infos[it->b_id()]->end() - read_infos[it->b_id()]->begin();
+
+                for (const auto& h: read_infos[it->b_id()]->coverage_hills()) {
                     if (begin < h.second && h.first < end) {
-                        // if (h.second < it->b_length() / 2) {
-                        if (h.first < 0.10 * it->b_length()) {
+                        if (h.first < 0.10 * valid_read_length + read_infos[it->b_id()]->begin()) {
                             if (end < h.second) {
                                 is_valid_overlap[it->id()] = false;
                             }
-                        // } else {
-                        } else if (h.second > 0.9 * it->b_length()) {
+                        } else if (h.second > 0.9 * valid_read_length + read_infos[it->b_id()]->begin()) {
                             if (begin > h.first) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         }
                     }
                 }
-            }*/
+            }
 
             bool is_valid = it->update(
                 read_infos[it->a_id()]->begin(),
