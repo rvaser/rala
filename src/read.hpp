@@ -118,6 +118,12 @@ class ReadInfo {
         void update_coverage_graph(std::vector<uint32_t>& mappings);
 
         /*!
+         * @brief Clears coverage_graph_ and sets begin_, end_ to 0, coverage_graph_.size()
+         * respectively
+         */
+        void reset_coverage_graph();
+
+        /*!
          * @biref Smooths coverage graph with 1D average filter
          */
         void smooth_coverage_graph();
@@ -158,6 +164,8 @@ class ReadInfo {
          */
         void find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
             double slope_width_ratio, double hill_width_ratio, uint32_t dataset_median);
+
+        void find_coverage_hills_simple(uint32_t min_coverage);
 
         /*!
          * @brief Print coverage_graph_ in csv format to path

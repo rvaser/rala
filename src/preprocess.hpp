@@ -29,6 +29,10 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     const std::string& reads_path, const std::string& overlaps_path, uint32_t overlap_type,
     std::shared_ptr<thread_pool::ThreadPool> thread_pool);
 
+void preprocessDataWithReference(std::vector<std::shared_ptr<ReadInfo>>& read_infos,
+    const std::string& overlaps_reference_path, uint32_t overlap_type,
+    std::shared_ptr<thread_pool::ThreadPool> thread_pool);
+
 /*!
  * @brief Chimeric read detection with reference
  */

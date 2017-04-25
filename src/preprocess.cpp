@@ -139,6 +139,9 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             if (mappings.size() <= max_read_id) {
                 mappings.resize(max_read_id + 1);
                 read_lengths.resize(max_read_id + 1);
+            }
+
+            if (read_infos.size() <= max_read_id) {
                 read_infos.resize(max_read_id + 1);
             }
 
@@ -152,7 +155,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 continue;
             }
 
-            // duplicate overlaps check
+            // duplicate overlaps check TODO: last read overlaps are not added to mappings!
             if (current_overlaps.size() != 0 && current_overlaps.front()->a_id() != it->a_id()) {
                 num_duplicate_overlaps += removeDuplicateOverlaps(is_valid_overlap, current_overlaps);
 
@@ -483,7 +486,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     {
         std::vector<std::future<void>> thread_futures;
         for (uint32_t i = 0; i < read_infos.size(); ++i) {
-            if (read_infos[i] == nullptr) {
+            if (read_infos[i] == nullptr || !read_infos[i]->coverage_hills().empty()) {
                 continue;
             }
 
@@ -650,6 +653,162 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     fprintf(stderr, "  number of valid overlaps = %lu (out of %lu)\n", num_valid_overlaps, is_valid_overlap.size());
     fprintf(stderr, "  number of valid reads = %lu (out of %lu)\n", num_valid_reads, is_valid_read.size());
     fprintf(stderr, "}\n\n");
+}
+
+void preprocessDataWithReference(std::vector<std::shared_ptr<ReadInfo>>& read_infos,
+    const std::string& overlaps_reference_path, uint32_t overlap_type,
+    std::shared_ptr<thread_pool::ThreadPool> thread_pool) {
+
+    fprintf(stderr, "Preprocessing data with reference {\n");
+
+    std::vector<std::shared_ptr<Overlap>> overlaps;
+    std::vector<std::vector<uint32_t>> mappings;
+
+    std::vector<uint32_t> read_lengths;
+
+    auto oreader = overlap_type == 0 ?
+        bioparser::createReader<Overlap, bioparser::MhapReader>(overlaps_reference_path) :
+        bioparser::createReader<Overlap, bioparser::PafReader>(overlaps_reference_path);
+
+    while (true) {
+        auto status = oreader->read_objects(overlaps, kChunkSize);
+
+        for (const auto& it: overlaps) {
+
+            if (mappings.size() <= it->a_id()) {
+                mappings.resize(it->a_id() + 1);
+                read_infos.resize(it->a_id() + 1);
+                read_lengths.resize(it->a_id() + 1, 0);
+            }
+
+            read_lengths[it->a_id()] = it->a_length();
+
+            mappings[it->a_id()].push_back(((it->a_rc() ? it->a_length() - it->a_end() : it->a_begin()) + 1) << 1 | 0);
+            mappings[it->a_id()].push_back(((it->a_rc() ? it->a_length() - it->a_begin() : it->a_end()) - 1) << 1 | 1);
+        }
+
+        overlaps.clear();
+
+        // create missing coverage graphs
+        {
+            std::vector<std::future<std::unique_ptr<ReadInfo>>> thread_futures;
+            std::vector<uint32_t> task_ids;
+            for (uint32_t i = 0; i < mappings.size(); ++i) {
+                if (read_infos[i] != nullptr) {
+                    continue;
+                }
+                thread_futures.emplace_back(thread_pool->submit_task(
+                    createReadInfo, i, read_lengths[i], std::ref(mappings[i])));
+                task_ids.emplace_back(i);
+            }
+
+            for (uint32_t i = 0; i < thread_futures.size(); ++i) {
+                thread_futures[i].wait();
+                read_infos[task_ids[i]] = std::move(thread_futures[i].get());
+                std::vector<uint32_t>().swap(mappings[task_ids[i]]);
+            }
+        }
+
+        // update coverage graphs
+        {
+            std::vector<std::future<void>> thread_futures;
+            std::vector<uint32_t> task_ids;
+            for (uint32_t i = 0; i < mappings.size(); ++i) {
+                if (read_infos[i] == nullptr) {
+                    continue;
+                }
+
+                thread_futures.emplace_back(thread_pool->submit_task(
+                    [&](uint32_t id) { read_infos[id]->update_coverage_graph(mappings[id]); }, i));
+                task_ids.emplace_back(i);
+            }
+
+            for (uint32_t i = 0; i < thread_futures.size(); ++i) {
+                thread_futures[i].wait();
+                std::vector<uint32_t>().swap(mappings[task_ids[i]]);
+            }
+        }
+
+        if (status == false) {
+            break;
+        }
+    }
+    oreader.reset();
+    std::vector<std::vector<uint32_t>>().swap(mappings);
+
+    std::vector<uint32_t> specials = {};
+    for (const auto& id: specials) {
+        if (read_infos[id] == nullptr) {
+            continue;
+        }
+        read_infos[id]->print_csv("graphs/h" + std::to_string(id), 0);
+    }
+
+    // find valid regions
+    {
+        fprintf(stderr, "  Prefiltering data with reference {\n");
+
+        uint32_t num_prefiltered_reads = 0;
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                ++num_prefiltered_reads;
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool->submit_task(
+                [&](uint32_t id) { read_infos[id]->find_valid_region(1); }, i));
+        }
+        for (auto& it: thread_futures) {
+            it.wait();
+        }
+
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            if (read_infos[i]->coverage_graph().empty()) {
+                read_infos[i].reset();
+                ++num_prefiltered_reads;
+            }
+        }
+
+        fprintf(stderr, "    number of prefiltered reads = %u\n", num_prefiltered_reads);
+        fprintf(stderr, "  }\n");
+    }
+
+    // find coverage hills which represent repetitive regions
+    {
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool->submit_task(
+                [&](uint32_t id) { read_infos[id]->find_coverage_hills_simple(2); }, i));
+        }
+        for (auto& it: thread_futures) {
+            it.wait();
+        }
+
+        uint32_t num_repetitive_reads = 0;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            if (read_infos[i]->coverage_hills().empty()) {
+                read_infos[i].reset();
+            } else {
+                read_infos[i]->reset_coverage_graph();
+                ++num_repetitive_reads;
+            }
+        }
+
+        fprintf(stderr, "  number of repetitive reads = %u\n", num_repetitive_reads);
+    }
 }
 
 void findChimericReads(const std::string& reads_path, const std::string& overlaps_path,

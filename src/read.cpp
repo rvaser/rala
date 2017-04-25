@@ -113,6 +113,12 @@ void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
     }
 }
 
+void ReadInfo::reset_coverage_graph() {
+    begin_ = 0;
+    end_ = coverage_graph_.size();
+    std::fill(coverage_graph_.begin(), coverage_graph_.end(), 0);
+}
+
 void ReadInfo::smooth_coverage_graph() {
 
     if (coverage_graph_.empty()) {
@@ -429,6 +435,32 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
                 }
             }
         }
+    }
+}
+
+void ReadInfo::find_coverage_hills_simple(uint32_t min_coverage) {
+
+    if (coverage_graph_.empty()) {
+        return;
+    }
+
+    uint32_t current_begin = 0;
+    bool found_begin = false;
+
+    for (uint32_t i = begin_; i < end_; ++i) {
+        if (!found_begin && coverage_graph_[i] >= min_coverage) {
+            current_begin = i;
+            found_begin = true;
+        } else if (found_begin && coverage_graph_[i] < min_coverage) {
+            if ((i - current_begin) / (double) (end_ - begin_) < 0.9 &&
+                (current_begin < begin_ + 0.05 * (end_ - begin_) || i > begin_ + 0.95 * (end_ - begin_))) {
+                coverage_hills_.emplace_back(current_begin, i);
+            }
+            found_begin = false;
+        }
+    }
+    if (found_begin && (end_ - current_begin) / (double) (end_ - begin_) < 0.9) {
+        coverage_hills_.emplace_back(current_begin, end_);
     }
 }
 

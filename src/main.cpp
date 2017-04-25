@@ -14,7 +14,7 @@ int main(int argc, char** argv) {
     std::string reads_path = argc > 2 ? argv[2] : "";
     std::string overlaps_path = argc > 3 ? argv[3] : "";
     uint32_t overlap_type = argc > 4 ? atoi(argv[4]) : 0;
-    std::string mappings_path = argc > 5 ? argv[5] : "";
+    std::string overlaps_reference_path = argc > 5 ? argv[5] : "";
 
     switch (atoi(argv[1])) {
         case 1:
@@ -37,6 +37,12 @@ int main(int argc, char** argv) {
     std::vector<std::shared_ptr<Overlap>> overlaps;
     std::vector<std::shared_ptr<ReadInfo>> read_infos;
     double median;
+
+    if (!overlaps_reference_path.empty()) {
+        preprocessDataWithReference(read_infos, overlaps_reference_path,
+            overlap_type, thread_pool);
+    }
+
     preprocessData(reads, read_infos, overlaps, median, reads_path, overlaps_path,
         overlap_type, thread_pool);
 

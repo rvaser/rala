@@ -1005,16 +1005,16 @@ void Graph::print_csv(std::string path, const std::vector<std::shared_ptr<ReadIn
 
     for (const auto& node: nodes_) {
         if (node == nullptr || node->id % 2 == 0) continue;
-        fprintf(graph_file, "%u [%u] {%d} U:%d C:%u,%u [%u] {%d} U:%d C:%u,0,-\n",
-            node->id, node->length(), node->read_id, node->unitig_size, read_infos[node->read_id]->coverage_median(),
-            node->pair->id, node->pair->length(), node->pair->read_id, node->pair->unitig_size, read_infos[node->pair->read_id]->coverage_median());
+        fprintf(graph_file, "%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,0,-\n",
+            node->id, node->length(), node->read_id, node->unitig_size,
+            node->pair->id, node->pair->length(), node->pair->read_id, node->pair->unitig_size);
     }
 
     for (const auto& edge: edges_) {
         if (edge == nullptr) continue;
-        fprintf(graph_file, "%u [%u] {%d} U:%d C:%u,%u [%u] {%d} U:%d C:%u,1,%d %d %g\n",
-            edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size, read_infos[edge->begin_node->read_id]->coverage_median(),
-            edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size, read_infos[edge->end_node->read_id]->coverage_median(),
+        fprintf(graph_file, "%u [%u] {%d} U:%d,%u [%u] {%d} U:%d,1,%d %d %g\n",
+            edge->begin_node->id, edge->begin_node->length(), edge->begin_node->read_id, edge->begin_node->unitig_size,
+            edge->end_node->id, edge->end_node->length(), edge->end_node->read_id, edge->end_node->unitig_size,
             edge->id, edge->length, edge->quality);
     }
 
