@@ -50,6 +50,8 @@ void findUncontainedReads(const std::string& reads_path, const std::string& over
  */
 void fastaToFastq(const std::string& reads_path);
 
+void joinFastqFiles(const std::string& reads_path1, const std::string& reads_path2);
+
 /*
  * @brief Checks if two numbers are comparable
  */

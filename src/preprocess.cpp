@@ -467,7 +467,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
 
     // smooth coverage graphs
-    {
+    /*{
         std::vector<std::future<void>> thread_futures;
         for (uint32_t i = 0; i < read_infos.size(); ++i) {
             if (read_infos[i] == nullptr) {
@@ -480,7 +480,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         for (auto& it: thread_futures) {
             it.wait();
         }
-    }
+    }*/
 
     // find coverage hills which represent repetitive regions
     {
@@ -530,15 +530,16 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 uint32_t end = it->a_rc() ? it->a_length() - it->a_begin() : it->a_end();
 
                 uint32_t valid_read_length = read_infos[it->a_id()]->end() - read_infos[it->a_id()]->begin();
+                uint32_t fuzz = 0.05 * valid_read_length;
 
                 for (const auto& h: read_infos[it->a_id()]->coverage_hills()) {
                     if (begin < h.second && h.first < end) {
-                        if (h.first < 0.10 * valid_read_length + read_infos[it->a_id()]->begin()) {
-                            if (end < h.second) {
+                        if (h.first < 0.1 * valid_read_length + read_infos[it->a_id()]->begin()) {
+                            if (end < h.second + fuzz) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         } else if (h.second > 0.9 * valid_read_length + read_infos[it->a_id()]->begin()) {
-                            if (begin > h.first) {
+                            if (begin > h.first - fuzz) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         }
@@ -551,15 +552,16 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 uint32_t end = it->b_rc() ? it->b_length() - it->b_begin() : it->b_end();
 
                 uint32_t valid_read_length = read_infos[it->b_id()]->end() - read_infos[it->b_id()]->begin();
+                uint32_t fuzz = 0.05 * valid_read_length;
 
                 for (const auto& h: read_infos[it->b_id()]->coverage_hills()) {
                     if (begin < h.second && h.first < end) {
-                        if (h.first < 0.10 * valid_read_length + read_infos[it->b_id()]->begin()) {
-                            if (end < h.second) {
+                        if (h.first < 0.1 * valid_read_length + read_infos[it->b_id()]->begin()) {
+                            if (end < h.second + fuzz) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         } else if (h.second > 0.9 * valid_read_length + read_infos[it->b_id()]->begin()) {
-                            if (begin > h.first) {
+                            if (begin > h.first - fuzz) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         }
@@ -1114,6 +1116,41 @@ void fastaToFastq(const std::string& reads_path) {
         if (status == false) {
             break;
         }
+    }
+}
+
+void joinFastqFiles(const std::string& reads_path1, const std::string& reads_path2) {
+
+    std::vector<std::shared_ptr<Read>> reads1, reads2;
+    auto rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path1);
+    rreader->read_objects(reads1, -1);
+    rreader.reset();
+    std::sort(reads1.begin(), reads1.end(), [](std::shared_ptr<Read> a, std::shared_ptr<Read> b) { return atoi(a->name().c_str()) < atoi(b->name().c_str()); });
+
+    rreader = bioparser::createReader<Read, bioparser::FastqReader>(reads_path2);
+    rreader->read_objects(reads2, -1);
+    rreader.reset();
+
+    uint32_t j = 0;
+    for (uint32_t i = 0; i < reads1.size(); ++i) {
+        uint32_t id = atoi(reads1[i]->name().c_str()) - 1;
+        for (; j < id; ++j) {
+            fprintf(stdout, "@%s\n%s\n+\n%s\n",
+                reads2[j]->name().c_str(),
+                reads2[j]->sequence().c_str(),
+                reads2[j]->quality().c_str());
+        }
+        j = id + 1;
+        fprintf(stdout, "@%s\n%s\n+\n%s\n",
+            reads1[i]->name().c_str(),
+            reads1[i]->sequence().c_str(),
+            reads1[i]->quality().c_str());
+    }
+    for (; j < reads2.size(); ++j) {
+        fprintf(stdout, "@%s\n%s\n+\n%s\n",
+            reads2[j]->name().c_str(),
+            reads2[j]->sequence().c_str(),
+            reads2[j]->quality().c_str());
     }
 }
 

@@ -26,6 +26,9 @@ int main(int argc, char** argv) {
         case 3:
             fastaToFastq(reads_path);
             return 0;
+        case 4:
+            joinFastqFiles(reads_path, overlaps_path);
+            return 0;
         case 0:
         default:
             break;

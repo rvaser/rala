@@ -115,7 +115,7 @@ void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
 
 void ReadInfo::reset_coverage_graph() {
     begin_ = 0;
-    end_ = coverage_graph_.size();
+    end_ = coverage_graph_.size() - 1;
     std::fill(coverage_graph_.begin(), coverage_graph_.end(), 0);
 }
 
@@ -231,6 +231,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
     if (coverage_graph_.empty()) {
         return;
     }
+    this->find_coverage_median();
 
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
@@ -247,6 +248,10 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
         if (i > 0) {
             coverage_window_add(left_window, coverage_graph_[i - 1], i - 1);
             coverage_window_update(left_window, i - 1 - k);
+
+            if (coverage_graph_[i] > coverage_median_ / 2) {
+                continue;
+            }
 
             int32_t current = coverage_graph_[i] * slope_ratio;
             if (left_window.front().second > current) {
@@ -293,6 +298,13 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
         }
         coverage_window_update(right_window, i);
 
+        if (i == 0) {
+            int32_t current = coverage_graph_[i] * slope_ratio;
+            if (coverage_graph_[i + 1] > dataset_median && !right_window.empty() && right_window.front().second > (int32_t) dataset_median && right_window.front().second > current) {
+                slopes.push_back(i << 1 | 1);
+            }
+        }
+
         if (i > 0) {
             coverage_window_add(left_window, coverage_graph_[i - 1], i - 1);
             coverage_window_update(left_window, i - 1 - k);
@@ -307,7 +319,7 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
         }
     }
 
-    if (slopes.size() > 2) {
+    if (slopes.size() > 1) {
 
         uint32_t ldownslope = 0, fdownslope = 0;
         bool found_fds = false;
@@ -402,7 +414,7 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
         auto check_hill = [&](uint32_t begin, uint32_t end, double median) -> bool {
             uint32_t valid_bases = 0;
             for (uint32_t i = begin; i < end; ++i) {
-                if (coverage_graph_[i] >= median) {
+                if (coverage_graph_[i] >= median * slope_ratio) {
                     ++valid_bases;
                 }
             }
@@ -433,6 +445,9 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
                         coverage_hills_.emplace_back(slope_regions[r].first >> 1, slope_regions[r + 1].second);
                     }
                 }
+            }
+            if (print) {
+                print_csv("graphs/h" + std::to_string(id_), 0);
             }
         }
     }
