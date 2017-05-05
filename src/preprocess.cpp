@@ -319,6 +319,61 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         fprintf(stderr, "  }\n");
     }
 
+    // find coverage median and filter reads according to it
+    {
+        uint16_t median_of_medians = 0, average_median = 0;
+        uint32_t num_low_median_reads = 0;
+
+        std::vector<std::future<void>> thread_futures;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool->submit_task(
+                [&](uint32_t id) { read_infos[id]->find_coverage_median(); }, i));
+        }
+
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+
+        std::vector<uint16_t> medians;
+        uint32_t median_sum = 0;
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            medians.emplace_back(read_infos[i]->coverage_median());
+            median_sum += medians.back();
+        }
+
+        std::sort(medians.begin(), medians.end());
+        median_of_medians = medians.size() % 2 == 1 ? medians[medians.size() / 2] :
+            (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
+        average_median = median_sum / medians.size();
+
+        fprintf(stderr, "  (median/average of coverage medians = %u/%u)\n", median_of_medians, average_median);
+
+        for (uint32_t i = 0; i < read_infos.size(); ++i) {
+            if (read_infos[i] == nullptr) {
+                continue;
+            }
+
+            if (read_infos[i]->coverage_median() * kMedianRatio < median_of_medians) {
+                read_infos[i].reset();
+                is_valid_read[i] = false;
+                ++num_low_median_reads;
+            }
+        }
+
+        fprintf(stderr, "  number of reads with coverage median < %u / %.3lf = %u\n",
+            median_of_medians, kMedianRatio, num_low_median_reads);
+
+        dataset_coverage_median = median_of_medians;
+    }
+
     // find chimeric reads by looking for tight coverage pits
     {
         std::vector<std::future<void>> thread_futures;
@@ -328,7 +383,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             }
 
             thread_futures.emplace_back(thread_pool->submit_task(
-                [&](uint32_t id) { read_infos[id]->find_coverage_pits(1.817, kSlopeWidth, kSlopeWidthRatio); }, i));
+                [&](uint32_t id) { read_infos[id]->find_coverage_pits(1.817, kSlopeWidth, kSlopeWidthRatio, dataset_coverage_median); }, i));
         }
         for (auto& it: thread_futures) {
             it.wait();
@@ -409,13 +464,8 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
 
         oreader.reset();
-    }
 
-    // find coverage median and filter reads according to it
-    {
-        uint16_t median_of_medians = 0, average_median = 0;
-        uint32_t num_low_median_reads = 0;
-
+        // update coverage medians
         std::vector<std::future<void>> thread_futures;
         for (uint32_t i = 0; i < read_infos.size(); ++i) {
             if (read_infos[i] == nullptr) {
@@ -431,39 +481,19 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
         }
 
         std::vector<uint16_t> medians;
-        uint32_t median_sum = 0;
         for (uint32_t i = 0; i < read_infos.size(); ++i) {
             if (read_infos[i] == nullptr) {
                 continue;
             }
 
             medians.emplace_back(read_infos[i]->coverage_median());
-            median_sum += medians.back();
         }
 
         std::sort(medians.begin(), medians.end());
-        median_of_medians = medians.size() % 2 == 1 ? medians[medians.size() / 2] :
+        dataset_coverage_median = medians.size() % 2 == 1 ? medians[medians.size() / 2] :
             (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
-        average_median = median_sum / medians.size();
 
-        fprintf(stderr, "  (median/average of coverage medians = %u/%u)\n", median_of_medians, average_median);
-
-        for (uint32_t i = 0; i < read_infos.size(); ++i) {
-            if (read_infos[i] == nullptr) {
-                continue;
-            }
-
-            if (read_infos[i]->coverage_median() * kMedianRatio < median_of_medians) {
-                read_infos[i].reset();
-                is_valid_read[i] = false;
-                ++num_low_median_reads;
-            }
-        }
-
-        fprintf(stderr, "  number of reads with coverage median < %u / %.3lf = %u\n",
-            median_of_medians, kMedianRatio, num_low_median_reads);
-
-        dataset_coverage_median = median_of_medians;
+        fprintf(stderr, "  (after correction: median of coverage medians = %u)\n", (uint32_t) dataset_coverage_median);
     }
 
     // smooth coverage graphs

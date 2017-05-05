@@ -149,7 +149,7 @@ class ReadInfo {
          * value and coverage_graph_ is deleted (the read is not valid)
          */
         void find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
-            double slope_width_ratio);
+            double slope_width_ratio, uint16_t dataset_median);
 
         /*!
          * @brief Returns regions of read which ought to be repetitive in the genome
@@ -163,14 +163,14 @@ class ReadInfo {
          * and stores them in coverage_hills_
          */
         void find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
-            double slope_width_ratio, double hill_width_ratio, uint32_t dataset_median);
+            double slope_width_ratio, double hill_width_ratio, uint16_t dataset_median);
 
         void find_coverage_hills_simple(uint32_t min_coverage);
 
         /*!
          * @brief Print coverage_graph_ in csv format to path
          */
-        void print_csv(std::string path, uint32_t dataset_median) const;
+        void print_csv(std::string path, uint16_t dataset_median) const;
 
         friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length,
             std::vector<uint32_t>& mappings);

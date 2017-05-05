@@ -226,12 +226,11 @@ void ReadInfo::find_valid_region(uint32_t coverage) {
 }
 
 void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
-    double slope_width_ratio) {
+    double slope_width_ratio, uint16_t dataset_median) {
 
     if (coverage_graph_.empty()) {
         return;
     }
-    this->find_coverage_median();
 
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
     std::vector<int32_t> slopes;
@@ -249,7 +248,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
             coverage_window_add(left_window, coverage_graph_[i - 1], i - 1);
             coverage_window_update(left_window, i - 1 - k);
 
-            if (coverage_graph_[i] > coverage_median_ / 2) {
+            if (coverage_graph_[i] > dataset_median / 2) {
                 continue;
             }
 
@@ -267,7 +266,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
         std::sort(slopes.begin(), slopes.end());
         for (uint32_t i = 0; i < slopes.size() - 1; ++i) {
             if (!(slopes[i] & 1) && (slopes[i + 1] & 1) && (slopes[i + 1] >> 1) - (slopes[i] >> 1) < k) {
-                // print_csv("graphs/c" + std::to_string(id_), coverage_median_);
+                print_csv("graphs/c" + std::to_string(id_), dataset_median);
                 begin_ = 0;
                 end_ = 0;
                 std::vector<uint16_t>().swap(coverage_graph_);
@@ -278,7 +277,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
 }
 
 void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
-    double slope_width_ratio, double hill_width_ratio, uint32_t dataset_median) {
+    double slope_width_ratio, double hill_width_ratio, uint16_t dataset_median) {
 
     if (coverage_graph_.empty()) {
         return;
@@ -479,7 +478,7 @@ void ReadInfo::find_coverage_hills_simple(uint32_t min_coverage) {
     }
 }
 
-void ReadInfo::print_csv(std::string path, uint32_t dataset_median) const {
+void ReadInfo::print_csv(std::string path, uint16_t dataset_median) const {
 
     if (coverage_graph_.empty()) {
         return;
