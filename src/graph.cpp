@@ -341,7 +341,8 @@ void Graph::remove_long_edges() {
         for (const auto& edge1: node->suffix_edges) {
             for (const auto& edge2: node->suffix_edges) {
                 if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true) continue;
-                if (edge1->matching_bases() > kMinMatchingBasesRatio * edge2->matching_bases()) {
+                // if (edge1->matching_bases() > kMinMatchingBasesRatio * edge2->matching_bases()) {
+                if ((node->length() - edge2->length) / (double) (node->length() - edge1->length) < 0.7) {
                     edge2->mark = true;
                     edge2->pair->mark = true;
                     marked_edges_.insert(edge2->id);
