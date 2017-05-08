@@ -99,6 +99,10 @@ class ReadInfo {
             return end_;
         }
 
+        bool is_valid() const {
+            return is_valid_;
+        }
+
         uint16_t coverage_median() const {
             return coverage_median_;
         };
@@ -116,6 +120,12 @@ class ReadInfo {
          * @brief Adds new mappings to coverage_graph_
          */
         void update_coverage_graph(std::vector<uint32_t>& mappings);
+
+        /*!
+         * @brief Reduces coverage_graph_ by setting values outside the interval
+         * [begin, end> to zeroes
+         */
+        void reduce_coverage_graph(uint32_t begin, uint32_t end);
 
         /*!
          * @brief Clears coverage_graph_ and sets begin_, end_ to 0, coverage_graph_.size()
@@ -138,17 +148,18 @@ class ReadInfo {
         /*!
          * @brief Locates region in coverage_graph_ with values greater or equal to coverage;
          * updates begin_, end_ and coverage_graph_ accordingly; if there is no such region
-         * (with valid coverage and longer than 500), both begin_ and end_ are set to same
-         * value and coverage_graph_ is deleted (the read is not valid)
+         * (with valid coverage and longer than 500), object is invalidated
          */
         void find_valid_region(uint32_t coverage);
 
         /*!
          * @brief Locates pits in coverage_graph_ which ought to indicate that the
-         * read is chimeric; if a pit is present, both begin_ and end_ are set to same
-         * value and coverage_graph_ is deleted (the read is not valid)
+         * read is chimeric; if a pit is found, both begin_ and end_ are set
+         * to the longest non-chimeric region of the read and coverage_graph_ is
+         * updated accordingly; if the new area is shorter than 500, object is
+         * invalidated; if no pits are found, false is returned
          */
-        void find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
+        bool find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
             double slope_width_ratio, uint16_t dataset_median);
 
         /*!
@@ -159,8 +170,8 @@ class ReadInfo {
         }
 
         /*!
-         * @brief Locates regions in coverage_graph_ which ought to be repetitive in the genome
-         * and stores them in coverage_hills_
+         * @brief Locates regions in coverage_graph_ which ought to be repetitive
+         * in the genome and stores them in coverage_hills_.
          */
         void find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
             double slope_width_ratio, double hill_width_ratio, uint16_t dataset_median);
@@ -189,6 +200,7 @@ class ReadInfo {
         uint32_t begin_;
         uint32_t end_;
         uint16_t coverage_median_;
+        bool is_valid_;
         std::vector<uint16_t> coverage_graph_;
         std::vector<std::pair<uint32_t, uint32_t>> coverage_hills_;
 };

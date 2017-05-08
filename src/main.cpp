@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     graph->print_csv("layout_graph.csv", read_infos);
 
     // graph->remove_selected_nodes_and_edges();
-    graph->print_knots(read_infos, median);
+    // graph->print_knots(read_infos, median);
 
     while (true) {
         uint32_t num_changes = graph->create_unitigs();

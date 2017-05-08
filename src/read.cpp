@@ -76,7 +76,7 @@ std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info) {
 }
 
 ReadInfo::ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings)
-        : id_(id), begin_(0), end_(read_length), coverage_median_(0),
+        : id_(id), begin_(0), end_(read_length), coverage_median_(0), is_valid_(true),
         coverage_graph_(read_length + 1, 0), coverage_hills_() {
 
     update_coverage_graph(mappings);
@@ -113,6 +113,20 @@ void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
     }
 }
 
+void ReadInfo::reduce_coverage_graph(uint32_t begin, uint32_t end) {
+
+    assert(begin < end);
+
+    for (uint32_t i = begin_; i < begin; ++i) {
+        coverage_graph_[i] = 0;
+    }
+    for (uint32_t i = end; i < end_; ++i) {
+        coverage_graph_[i] = 0;
+    }
+    begin_ = begin;
+    end_ = end;
+}
+
 void ReadInfo::reset_coverage_graph() {
     begin_ = 0;
     end_ = coverage_graph_.size() - 1;
@@ -121,7 +135,7 @@ void ReadInfo::reset_coverage_graph() {
 
 void ReadInfo::smooth_coverage_graph() {
 
-    if (coverage_graph_.empty()) {
+    if (is_valid_ == false) {
         return;
     }
 
@@ -184,7 +198,7 @@ void ReadInfo::correct_coverage_graph(uint32_t region_begin, uint32_t region_end
 
 void ReadInfo::find_valid_region(uint32_t coverage) {
 
-    if (coverage_graph_.empty()) {
+    if (is_valid_ == false) {
         return;
     }
 
@@ -209,27 +223,18 @@ void ReadInfo::find_valid_region(uint32_t coverage) {
         }
     }
 
-    if (new_begin == new_end || new_end - new_begin < 500) {
-        std::vector<uint16_t>().swap(coverage_graph_);
-        begin_ = 0;
-        end_ = 0;
+    if (new_begin == new_end || (new_end - new_begin) < 500) {
+        is_valid_ = false;
     } else {
-        for (uint32_t i = begin_; i < new_begin; ++i) {
-            coverage_graph_[i] = 0;
-        }
-        for (uint32_t i = new_end; i < end_; ++i) {
-            coverage_graph_[i] = 0;
-        }
-        begin_ = new_begin;
-        end_ = new_end;
+        reduce_coverage_graph(new_begin, new_end);
     }
 }
 
-void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
+bool ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
     double slope_width_ratio, uint16_t dataset_median) {
 
-    if (coverage_graph_.empty()) {
-        return;
+    if (is_valid_ == false) {
+        return false;
     }
 
     std::deque<std::pair<int32_t, int32_t>> left_window, right_window;
@@ -238,6 +243,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
     int32_t k = std::max(min_slope_width, uint32_t(slope_width_ratio * (end_ - begin_)));
     int32_t read_length = coverage_graph_.size();
 
+    int32_t median_threshold = dataset_median / 2;
     for (int32_t i = -1 * k + 2; i < read_length - 1; ++i) {
         if (i < read_length - k) {
             coverage_window_add(right_window, coverage_graph_[i + k], i + k);
@@ -248,7 +254,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
             coverage_window_add(left_window, coverage_graph_[i - 1], i - 1);
             coverage_window_update(left_window, i - 1 - k);
 
-            if (coverage_graph_[i] > dataset_median / 2) {
+            if (coverage_graph_[i] > (uint16_t) median_threshold) {
                 continue;
             }
 
@@ -263,23 +269,49 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
     }
 
     if (slopes.size() > 0) {
+
+        bool is_chimeric = false;
         std::sort(slopes.begin(), slopes.end());
+
+        std::vector<uint32_t> breaking_points(1, begin_);
         for (uint32_t i = 0; i < slopes.size() - 1; ++i) {
-            if (!(slopes[i] & 1) && (slopes[i + 1] & 1) && (slopes[i + 1] >> 1) - (slopes[i] >> 1) < k) {
-                // print_csv("graphs/c" + std::to_string(id_), dataset_median);
-                begin_ = 0;
-                end_ = 0;
-                std::vector<uint16_t>().swap(coverage_graph_);
-                break;
+            if (!(slopes[i] & 1) && (slopes[i + 1] & 1) &&
+                (slopes[i + 1] >> 1) - (slopes[i] >> 1) < k) {
+                is_chimeric = true;
+                breaking_points.push_back(((slopes[i] >> 1) + (slopes[i + 1] >> 1)) / 2);
             }
         }
+        breaking_points.push_back(end_);
+
+        if (is_chimeric) {
+            print_csv("graphs/c" + std::to_string(id_), dataset_median);
+
+            uint32_t new_begin = 0, new_end = 0;
+            for (uint32_t i = 0; i < breaking_points.size() - 1; ++i) {
+                if (breaking_points[i + 1] - breaking_points[i] > new_end - new_begin) {
+                    new_begin = breaking_points[i];
+                    new_end = breaking_points[i + 1];
+                }
+            }
+            // fprintf(stderr, "%lu: (%u, %u)\n", id_, new_begin, new_end);
+
+            if (new_begin == new_end || (new_end - new_begin) < 500) {
+                is_valid_ = false;
+            } else {
+                reduce_coverage_graph(new_begin, new_end);
+            }
+
+            return true;
+        }
     }
+
+    return false;
 }
 
 void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
     double slope_width_ratio, double hill_width_ratio, uint16_t dataset_median) {
 
-    if (coverage_graph_.empty()) {
+    if (is_valid_ == false) {
         return;
     }
 
@@ -299,7 +331,9 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
 
         if (i == 0) {
             int32_t current = coverage_graph_[i] * slope_ratio;
-            if (coverage_graph_[i + 1] > dataset_median && !right_window.empty() && right_window.front().second > (int32_t) dataset_median && right_window.front().second > current) {
+            if (coverage_graph_[i + 1] > dataset_median && !right_window.empty() &&
+                right_window.front().second > (int32_t) dataset_median &&
+                right_window.front().second > current) {
                 slopes.push_back(i << 1 | 1);
             }
         }
@@ -309,10 +343,15 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
             coverage_window_update(left_window, i - 1 - k);
 
             int32_t current = coverage_graph_[i] * slope_ratio;
-            if (coverage_graph_[i - 1] > dataset_median && left_window.front().second > (int32_t) dataset_median && left_window.front().second > current) {
+            if (coverage_graph_[i - 1] > dataset_median &&
+                left_window.front().second > (int32_t) dataset_median &&
+                left_window.front().second > current) {
                 slopes.push_back(i << 1 | 0);
             }
-            if ((i == read_length - 1 || coverage_graph_[i + 1] > dataset_median) && !right_window.empty() && right_window.front().second > (int32_t) dataset_median && right_window.front().second > current) {
+            if ((i == read_length - 1 || coverage_graph_[i + 1] > dataset_median) &&
+                !right_window.empty() &&
+                right_window.front().second > (int32_t) dataset_median &&
+                right_window.front().second > current) {
                 slopes.push_back(i << 1 | 1);
             }
         }
@@ -454,7 +493,7 @@ void ReadInfo::find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
 
 void ReadInfo::find_coverage_hills_simple(uint32_t min_coverage) {
 
-    if (coverage_graph_.empty()) {
+    if (is_valid_ == false) {
         return;
     }
 
@@ -480,7 +519,7 @@ void ReadInfo::find_coverage_hills_simple(uint32_t min_coverage) {
 
 void ReadInfo::print_csv(std::string path, uint16_t dataset_median) const {
 
-    if (coverage_graph_.empty()) {
+    if (is_valid_ == false) {
         return;
     }
 
