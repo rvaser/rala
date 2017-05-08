@@ -129,6 +129,27 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     std::vector<std::shared_ptr<Overlap>> overlaps_of_spec;
     uint32_t spec = 70133;
 
+    auto store_valid_overlaps = [&](void) -> void {
+        num_duplicate_overlaps += removeDuplicateOverlaps(is_valid_overlap, current_overlaps);
+
+        // save valid overlaps
+        for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
+            if (is_valid_overlap[current_overlaps[i]->id()]) {
+                const auto& valid_overlap = current_overlaps[i];
+
+                if (valid_overlap->a_id() == spec || valid_overlap->b_id() == spec) overlaps_of_spec.push_back(valid_overlap);
+
+                mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_end() : valid_overlap->a_begin()) + 1) << 1 | 0);
+                mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_begin() : valid_overlap->a_end()) - 1) << 1 | 1);
+
+                mappings[valid_overlap->b_id()].push_back(((valid_overlap->b_rc() ? valid_overlap->b_length() - valid_overlap->b_end() : valid_overlap->b_begin()) + 1) << 1 | 0);
+                mappings[valid_overlap->b_id()].push_back(((valid_overlap->b_rc() ? valid_overlap->b_length() - valid_overlap->b_begin() : valid_overlap->b_end()) - 1) << 1 | 1);
+            }
+        }
+
+        current_overlaps.clear();
+    };
+
     while (true) {
         auto status = oreader->read_objects(overlaps, kChunkSize);
         is_valid_overlap.resize(is_valid_overlap.size() + overlaps.size(), true);
@@ -155,30 +176,17 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 continue;
             }
 
-            // duplicate overlaps check TODO: last read overlaps are not added to mappings!
             if (current_overlaps.size() != 0 && current_overlaps.front()->a_id() != it->a_id()) {
-                num_duplicate_overlaps += removeDuplicateOverlaps(is_valid_overlap, current_overlaps);
-
-                // save valid overlaps
-                for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
-                    if (is_valid_overlap[current_overlaps[i]->id()]) {
-                        const auto& valid_overlap = current_overlaps[i];
-
-                        if (valid_overlap->a_id() == spec || valid_overlap->b_id() == spec) overlaps_of_spec.push_back(valid_overlap);
-
-                        mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_end() : valid_overlap->a_begin()) + 1) << 1 | 0);
-                        mappings[valid_overlap->a_id()].push_back(((valid_overlap->a_rc() ? valid_overlap->a_length() - valid_overlap->a_begin() : valid_overlap->a_end()) - 1) << 1 | 1);
-
-                        mappings[valid_overlap->b_id()].push_back(((valid_overlap->b_rc() ? valid_overlap->b_length() - valid_overlap->b_end() : valid_overlap->b_begin()) + 1) << 1 | 0);
-                        mappings[valid_overlap->b_id()].push_back(((valid_overlap->b_rc() ? valid_overlap->b_length() - valid_overlap->b_begin() : valid_overlap->b_end()) - 1) << 1 | 1);
-                    }
-                }
-                current_overlaps.clear();
+                store_valid_overlaps();
             }
             current_overlaps.push_back(it);
         }
 
         overlaps.clear();
+
+        if (status == false) {
+            store_valid_overlaps();
+        }
 
         // create missing coverage graphs
         {
@@ -404,7 +412,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
 
     // correct coverage graphs
-    {
+    /*{
         std::vector<std::shared_ptr<ReadInfo>> copies;
         for (const auto& it: read_infos) {
             copies.emplace_back(std::move(copyReadInfo(it)));
@@ -494,7 +502,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
 
         fprintf(stderr, "  (after correction: median of coverage medians = %u)\n", (uint32_t) dataset_coverage_median);
-    }
+    }*/
 
     // smooth coverage graphs
     /*{
