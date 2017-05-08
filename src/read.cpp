@@ -266,7 +266,7 @@ void ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
         std::sort(slopes.begin(), slopes.end());
         for (uint32_t i = 0; i < slopes.size() - 1; ++i) {
             if (!(slopes[i] & 1) && (slopes[i + 1] & 1) && (slopes[i + 1] >> 1) - (slopes[i] >> 1) < k) {
-                print_csv("graphs/c" + std::to_string(id_), dataset_median);
+                // print_csv("graphs/c" + std::to_string(id_), dataset_median);
                 begin_ = 0;
                 end_ = 0;
                 std::vector<uint16_t>().swap(coverage_graph_);
