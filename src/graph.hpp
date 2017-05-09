@@ -55,12 +55,13 @@ public:
     void remove_cycles();
 
     /*!
-     * @brief Removes chimeric reads based on several graph patterns
+     * @brief Removes chimeric reads based on several graph patterns (possible graph
+     * fragmentation)
      */
     uint32_t remove_chimeras();
 
     /*!
-     * @brief Removes bubbles (possible information loss and graph fragmentation)
+     * @brief Removes bubbles
      */
     uint32_t remove_bubbles();
 
@@ -82,7 +83,7 @@ public:
     void print_csv(std::string path, const std::vector<std::shared_ptr<ReadInfo>>& read_infos) const;
 
     /*!
-     * @brief Temporary
+     * @brief For testing purposes
      */
     void remove_selected_nodes_and_edges();
 

@@ -284,7 +284,7 @@ bool ReadInfo::find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
         breaking_points.push_back(end_);
 
         if (is_chimeric) {
-            print_csv("graphs/c" + std::to_string(id_), dataset_median);
+            // print_csv("graphs/c" + std::to_string(id_), dataset_median);
 
             uint32_t new_begin = 0, new_end = 0;
             for (uint32_t i = 0; i < breaking_points.size() - 1; ++i) {

@@ -24,7 +24,7 @@ namespace rala {
 constexpr double kTransitiveEdgeEps = 0.12;
 constexpr uint32_t kMaxBubbleLength = 5000000;
 constexpr uint32_t kMinUnitigSize = 6;
-constexpr double kMinMatchingBasesRatio = 2.5;
+constexpr double kMaxOverlapRatio = 0.7;
 
 class Graph::Node {
     public:
@@ -341,8 +341,7 @@ void Graph::remove_long_edges() {
         for (const auto& edge1: node->suffix_edges) {
             for (const auto& edge2: node->suffix_edges) {
                 if (edge1->id == edge2->id || edge1->mark == true || edge2->mark == true) continue;
-                // if (edge1->matching_bases() > kMinMatchingBasesRatio * edge2->matching_bases()) {
-                if ((node->length() - edge2->length) / (double) (node->length() - edge1->length) < 0.7) {
+                if ((node->length() - edge2->length) / (double) (node->length() - edge1->length) < kMaxOverlapRatio) {
                     edge2->mark = true;
                     edge2->pair->mark = true;
                     marked_edges_.insert(edge2->id);
@@ -352,7 +351,6 @@ void Graph::remove_long_edges() {
             }
         }
     }
-    // fprintf(stderr, "Number of alignments to be done = %u\n", knots);
 
     fprintf(stderr, "    removed %u edges\n", num_long_edges);
     fprintf(stderr, "  }\n");
@@ -645,7 +643,20 @@ uint32_t Graph::remove_bubbles() {
         std::reverse(dst.begin(), dst.end());
     };
 
-    auto is_valid_bubble = [](const std::vector<int32_t>& path, const std::vector<int32_t>& other_path) -> bool {
+    auto calculate_path_length = [&](const std::vector<int32_t>& path) -> uint32_t {
+        uint32_t path_length = nodes_[path.back()]->length();
+        for (uint32_t i = 0; i < path.size() - 1; ++i) {
+            for (const auto& edge: nodes_[path[i]]->suffix_edges) {
+                if (edge->end_node->id == (uint32_t) path[i + 1]) {
+                    path_length += edge->length;
+                    break;
+                }
+            }
+        }
+        return path_length;
+    };
+
+    auto is_valid_bubble = [&](const std::vector<int32_t>& path, const std::vector<int32_t>& other_path) -> bool {
         std::set<int32_t> node_set;
         for (const auto& id: path) node_set.insert(id);
         for (const auto& id: other_path) node_set.insert(id);
@@ -658,16 +669,21 @@ uint32_t Graph::remove_bubbles() {
                 return false;
             }
         }
+        uint32_t path_length = calculate_path_length(path);
+        uint32_t other_path_length = calculate_path_length(other_path);
+        if (std::min(path_length, other_path_length) / (double) std::max(path_length, other_path_length) < 0.8) {
+            return false;
+        }
+
         return true;
     };
 
-    auto path_params = [&](const std::vector<int32_t>& path, uint32_t& num_reads, uint32_t& matching_bases, double& quality) -> void {
+    auto path_params = [&](const std::vector<int32_t>& path, uint32_t& num_reads, uint32_t& length) -> void {
         num_reads = 0;
         for (const auto& it: path) num_reads += nodes_[it]->unitig_size;
         for (const auto& edge: nodes_[path[0]]->suffix_edges) {
-            if (edge->end_node->id == path[1]) {
-                quality = edge->quality;
-                matching_bases = edge->matching_bases();
+            if (edge->end_node->id == (uint32_t) path[1]) {
+                length = edge->begin_node->length() - edge->length;
                 break;
             }
         }
@@ -738,27 +754,19 @@ uint32_t Graph::remove_bubbles() {
             if (!is_valid_bubble(path, other_path)) {
                 // fprintf(stderr, "Not valid bubble!\n");
             } else {
-                uint32_t path_reads = 0, path_matching_bases = 0;
-                double path_quality = 0;
-                path_params(path, path_reads, path_matching_bases, path_quality);
+                uint32_t path_num_reads = 0, path_overlap_length = 0;
+                path_params(path, path_num_reads, path_overlap_length);
 
-                uint32_t other_path_reads = 0, other_path_matching_bases = 0;
-                double other_path_quality = 0;
-                path_params(other_path, other_path_reads, other_path_matching_bases,
-                    other_path_quality);
-
-                // fprintf(stderr, "Path 1 = (%d, %d, %g) | Path 2 = (%d, %d, %g) | Worse path is ",
-                //      path_reads, path_matching_bases, path_quality,
-                //      other_path_reads, other_path_matching_bases, other_path_quality);
+                uint32_t other_path_num_reads = 0, other_path_overlap_length = 0;
+                path_params(other_path, other_path_num_reads, other_path_overlap_length);
 
                 std::vector<uint32_t> edges_for_removal;
-                if (path_reads > other_path_reads || (path_reads == other_path_reads && path_matching_bases > other_path_matching_bases)) {
+                if (path_num_reads > other_path_num_reads ||
+                    (path_num_reads == other_path_num_reads && path_overlap_length > other_path_overlap_length)) {
                     // fprintf(stderr, "2\n");
-                    // remove_path(other_path);
                     find_removable_edges(edges_for_removal, other_path);
                 } else {
                     // fprintf(stderr, "1\n");
-                    // remove_path(path);
                     find_removable_edges(edges_for_removal, path);
                 }
 
@@ -786,7 +794,6 @@ uint32_t Graph::remove_bubbles() {
     }
 
     remove_isolated_nodes();
-    // if (bubble_candidates.size() != 0) fprintf(stderr, "\n");
 
     fprintf(stderr, "    popped %d bubbles\n", num_bubbles_popped);
     fprintf(stderr, "  }\n");
@@ -921,9 +928,22 @@ void Graph::find_removable_edges(std::vector<uint32_t>& dst, const std::vector<i
     }
 
     if (pref == -1 && suff == -1) {
-        // remove whole path
-        for (uint32_t i = 0; i < path.size() - 1; ++i) {
-            dst.push_back(find_edge(path[i], path[i + 1]));
+        if (chimeric) {
+            // remove first or last edge
+            const auto& first_edge = edges_[find_edge(path[0], path[1])];
+            const auto& last_edge = edges_[find_edge(path[path.size() - 2], path[path.size() - 1])];
+            fprintf(stderr, "%d %d\n", first_edge->id, first_edge->begin_node->length() - first_edge->length);
+            fprintf(stderr, "%d %d\n", last_edge->id, last_edge->begin_node->length() - last_edge->length);
+            if ((first_edge->begin_node->length() - first_edge->length) > (last_edge->begin_node->length() - last_edge->length)) {
+                dst.push_back(last_edge->id);
+            } else {
+                dst.push_back(first_edge->id);
+            }
+        } else {
+            // remove whole path
+            for (uint32_t i = 0; i < path.size() - 1; ++i) {
+                dst.push_back(find_edge(path[i], path[i + 1]));
+            }
         }
         return;
     }

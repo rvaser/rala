@@ -57,16 +57,16 @@ int main(int argc, char** argv) {
     graph->remove_transitive_edges();
 
     while (true) {
-        uint32_t num_changes = graph->remove_tips();
+        uint32_t num_changes = graph->create_unitigs();
+        num_changes += graph->remove_tips();
         // num_changes += graph->remove_chimeras();
         num_changes += graph->remove_bubbles();
-        num_changes += graph->create_unitigs();
         if (num_changes == 0) {
             break;
         }
     }
 
-    graph->print_csv("layout_graph.csv", read_infos);
+    // graph->print_csv("layout_graph.csv", read_infos);
     graph->remove_long_edges();
 
     // graph->remove_selected_nodes_and_edges();

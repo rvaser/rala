@@ -404,7 +404,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
     }
 
     // correct coverage graphs
-    /*{
+    {
         fprintf(stderr, "  Correcting coverage graphs {\n");
         Timer timer;
         timer.start();
@@ -502,7 +502,7 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
             (uint32_t) dataset_coverage_median);
         timer.print("    time =");
         fprintf(stderr, "  }\n");
-    }*/
+    }
 
     // smooth coverage graphs
     /*{
