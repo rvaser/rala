@@ -24,7 +24,7 @@ namespace rala {
 constexpr double kTransitiveEdgeEps = 0.12;
 constexpr uint32_t kMaxBubbleLength = 5000000;
 constexpr uint32_t kMinUnitigSize = 6;
-constexpr double kMaxOverlapRatio = 0.7;
+constexpr double kMaxOverlapRatio = 0.9;
 
 class Graph::Node {
     public:
@@ -672,22 +672,18 @@ uint32_t Graph::remove_bubbles() {
         uint32_t path_length = calculate_path_length(path);
         uint32_t other_path_length = calculate_path_length(other_path);
         if (std::min(path_length, other_path_length) / (double) std::max(path_length, other_path_length) < 0.8) {
-            return false;
-        }
-
-        return true;
-    };
-
-    auto path_params = [&](const std::vector<int32_t>& path, uint32_t& num_reads, uint32_t& length) -> void {
-        num_reads = 0;
-        for (const auto& it: path) num_reads += nodes_[it]->unitig_size;
-        for (const auto& edge: nodes_[path[0]]->suffix_edges) {
-            if (edge->end_node->id == (uint32_t) path[1]) {
-                length = edge->begin_node->length() - edge->length;
-                break;
+            for (uint32_t i = 1; i < other_path.size() - 1; ++i) {
+                if (nodes_[other_path[i]]->in_degree() > 1 || nodes_[other_path[i]]->out_degree() > 1) {
+                    return false;
+                }
+            }
+            for (uint32_t i = 1; i < path.size() - 1; ++i) {
+                if (nodes_[path[i]]->in_degree() > 1 || nodes_[path[i]]->out_degree() > 1) {
+                    return false;
+                }
             }
         }
-        return;
+        return true;
     };
 
     uint32_t num_bubbles_popped = 0;
@@ -754,15 +750,14 @@ uint32_t Graph::remove_bubbles() {
             if (!is_valid_bubble(path, other_path)) {
                 // fprintf(stderr, "Not valid bubble!\n");
             } else {
-                uint32_t path_num_reads = 0, path_overlap_length = 0;
-                path_params(path, path_num_reads, path_overlap_length);
+                uint32_t path_num_reads = 0;
+                for (const auto& it: path) path_num_reads += nodes_[it]->unitig_size;
 
-                uint32_t other_path_num_reads = 0, other_path_overlap_length = 0;
-                path_params(other_path, other_path_num_reads, other_path_overlap_length);
+                uint32_t other_path_num_reads = 0;
+                for (const auto& it: other_path) other_path_num_reads += nodes_[it]->unitig_size;
 
                 std::vector<uint32_t> edges_for_removal;
-                if (path_num_reads > other_path_num_reads ||
-                    (path_num_reads == other_path_num_reads && path_overlap_length > other_path_overlap_length)) {
+                if (path_num_reads > other_path_num_reads) {
                     // fprintf(stderr, "2\n");
                     find_removable_edges(edges_for_removal, other_path);
                 } else {
