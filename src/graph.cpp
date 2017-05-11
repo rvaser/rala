@@ -884,7 +884,7 @@ void Graph::print_contigs() const {
 
     uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->id % 2 == 0 || node->unitig_size < kMinUnitigSize) continue;
+        if (node == nullptr || node->id % 2 == 0 || node->unitig_size < kMinUnitigSize || node->length() < 10000) continue;
         fprintf(stderr, "    >Contig_%d_(Utg:%u), length = %zu (%d -> %d)\n", contig_id,
             node->unitig_size, node->sequence.size(), node->read_ids.front(),
             node->read_ids.back());
