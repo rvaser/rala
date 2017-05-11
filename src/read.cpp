@@ -530,6 +530,7 @@ void ReadInfo::print_csv(std::string path, uint16_t dataset_median) const {
     }
 
     std::ofstream out(path);
+    out << "x " << id_ << " slopes median dataset_median" << std::endl;
     for (uint32_t i = 0; i < coverage_graph_.size(); ++i) {
         out << i << " " << coverage_graph_[i] << " " << (uint16_t) slope_graph[i] << " " << coverage_median_ << " " << dataset_median << std::endl;
     }
