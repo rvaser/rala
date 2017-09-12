@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <memory>
 
-#include "bioparser/src/bioparser.hpp"
+#include "bioparser/bioparser.hpp"
 
 namespace rala {
 

@@ -4,6 +4,8 @@
  * @brief Overlap class header file
  */
 
+#include <assert.h>
+
 #include "overlap.hpp"
 
 namespace rala {

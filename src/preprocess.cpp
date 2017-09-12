@@ -15,8 +15,8 @@
 #include "timer.hpp"
 #include "preprocess.hpp"
 
-#include "bioparser/src/bioparser.hpp"
-#include "thread_pool/src/thread_pool.hpp"
+#include "bioparser/bioparser.hpp"
+#include "thread_pool/thread_pool.hpp"
 
 namespace rala {
 

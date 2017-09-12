@@ -5,7 +5,7 @@
 #include "graph.hpp"
 #include "read.hpp"
 #include "preprocess.hpp"
-#include "thread_pool/src/thread_pool.hpp"
+#include "thread_pool/thread_pool.hpp"
 
 using namespace rala;
 

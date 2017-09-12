@@ -11,7 +11,7 @@
 #include <string>
 #include <deque>
 
-#include "bioparser/src/bioparser.hpp"
+#include "bioparser/bioparser.hpp"
 
 namespace rala {
 
