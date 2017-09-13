@@ -11,6 +11,15 @@
 #include <vector>
 #include <unordered_set>
 
+namespace bioparser {
+    template<class T>
+    class Reader;
+}
+
+namespace thread_pool {
+    class ThreadPool;
+}
+
 namespace rala {
 
 class Read;
@@ -18,13 +27,31 @@ class ReadInfo;
 class Overlap;
 
 class Graph;
-std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
-    const std::vector<std::shared_ptr<Overlap>>& overlaps);
+std::unique_ptr<Graph> createGraph(const std::string& reads_path,
+    const std::string& overlaps_path, uint32_t num_threads);
 
 class Graph {
 public:
 
     ~Graph();
+
+    /*!
+     * @brief Initializes all structures by reading the overlaps and trimming
+     * reads
+     */
+    void initialize();
+
+    /*!
+     * @brief Removes chimeric reads and those that do not bridge repetitive
+     * genomic regions
+     */
+    void preprocess();
+
+    /*!
+     * @brief Constructs the assembly graph by removing contained reads and
+     * transitive overlaps
+     */
+    void construct();
 
     /*!
      * @brief Removes nodes without edges (no information loss)
@@ -87,13 +114,13 @@ public:
      */
     void remove_selected_nodes_and_edges();
 
-    friend std::unique_ptr<Graph> createGraph(const std::vector<std::shared_ptr<Read>>& reads,
-        const std::vector<std::shared_ptr<Overlap>>& overlaps);
+    friend std::unique_ptr<Graph> createGraph(const std::string& reads_path,
+        const std::string& overlaps_path, uint32_t num_threads);
 
 private:
 
-    Graph(const std::vector<std::shared_ptr<Read>>& reads,
-        const std::vector<std::shared_ptr<Overlap>>& overlaps);
+    Graph(const std::string& reads_path, const std::string& overlaps_path,
+        uint32_t num_threads);
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
 
@@ -110,6 +137,14 @@ private:
 
     class Node;
     class Edge;
+
+    std::unique_ptr<bioparser::Reader<Read>> rreader_;
+    std::vector<std::unique_ptr<ReadInfo>> read_infos_;
+
+    std::unique_ptr<bioparser::Reader<Overlap>> oreader_;
+    std::vector<bool> is_valid_overlap_;
+
+    std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
 
     std::vector<std::shared_ptr<Node>> nodes_;
     std::vector<std::shared_ptr<Edge>> edges_;

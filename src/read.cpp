@@ -14,85 +14,79 @@
 
 namespace rala {
 
-std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
-    const char* sequence, uint32_t sequence_length, const char* quality,
-    uint32_t quality_length) {
-
-    assert(sequence_length > 0);
-    assert(sequence_length == quality_length);
-
-    return std::unique_ptr<Read>(new Read(id, name, name_length, sequence,
-        sequence_length, quality, quality_length));
-}
-
-Read::Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
-    uint32_t sequence_length)
+Read::Read(uint64_t id, const char* name, uint32_t name_length,
+    const char* sequence, uint32_t sequence_length)
         : id_(id), name_(name, name_length), sequence_(sequence, sequence_length),
-        quality_(), rc_() {
+        reverse_complement_() {
 }
 
-Read::Read(uint64_t id, const char* name, uint32_t name_length, const char* sequence,
-    uint32_t sequence_length, const char* quality, uint32_t quality_length)
-        : id_(id), name_(name, name_length), sequence_(sequence, sequence_length),
-        quality_(quality, quality_length), rc_() {
+Read::Read(uint64_t id, const char* name, uint32_t name_length,
+    const char* sequence, uint32_t sequence_length,
+    const char* quality, uint32_t quality_length)
+        : Read(id, name, name_length, sequence, sequence_length) {
 }
 
-void Read::trim_sequence(uint32_t begin, uint32_t end) {
+void Read::update(uint32_t begin, uint32_t end) {
     sequence_ = sequence_.substr(begin, end - begin);
-    quality_ = quality_.substr(begin, end - begin);
+    if (!reverse_complement_.empty()) {
+        create_reverse_complement();
+    }
 }
 
-void Read::create_rc() {
+void Read::create_reverse_complement() {
 
-    rc_.clear();
+    reverse_complement_.clear();
     for (int32_t i = sequence_.size() - 1; i >= 0; --i) {
-        char c = sequence_[i];
-        switch (c) {
+        switch (sequence_[i]) {
             case 'A':
-                c = 'T';
+                reverse_complement_ += 'T';
                 break;
             case 'T':
-                c = 'A';
+                reverse_complement_ += 'A';
                 break;
             case 'C':
-                c = 'G';
+                reverse_complement_ += 'G';
                 break;
             case 'G':
-                c = 'C';
+                reverse_complement_ += 'C';
                 break;
             default:
                 break;
         }
-        rc_ += c;
     }
+
+    assert(reverse_complement_.size() == sequence_.size());
 }
 
-std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings) {
-    return mappings.empty() ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(id, read_length, mappings));
+std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length) {
+    return std::unique_ptr<ReadInfo>(new ReadInfo(id, read_length));
 }
 
 std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info) {
-    return read_info == nullptr ? nullptr : std::unique_ptr<ReadInfo>(new ReadInfo(*read_info));
+    return read_info == nullptr ? nullptr :
+        std::unique_ptr<ReadInfo>(new ReadInfo(*read_info));
 }
 
-ReadInfo::ReadInfo(uint64_t id, uint32_t read_length, std::vector<uint32_t>& mappings)
-        : id_(id), begin_(0), end_(read_length), coverage_median_(0), is_valid_(true),
-        coverage_graph_(read_length + 1, 0), coverage_hills_() {
-
-    update_coverage_graph(mappings);
+ReadInfo::ReadInfo(uint64_t id, uint32_t read_length)
+        : id_(id), begin_(0), end_(read_length), coverage_median_(0),
+        is_valid_(true), coverage_graph_(), coverage_hills_() {
 }
 
 void ReadInfo::find_coverage_median() {
 
     std::vector<uint16_t> tmp(coverage_graph_);
     std::sort(tmp.begin(), tmp.end());
-    coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] : (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
+    coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] :
+        (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
 }
 
 void ReadInfo::update_coverage_graph(std::vector<uint32_t>& mappings) {
 
     if (mappings.empty()) {
         return;
+    }
+    if (coverage_graph_.empty()) {
+        coverage_graph_.resize(end_ - begin_ + 1, 0);
     }
     std::sort(mappings.begin(), mappings.end());
 
@@ -168,7 +162,7 @@ void ReadInfo::smooth_coverage_graph() {
 
 void ReadInfo::correct_coverage_graph(uint32_t region_begin, uint32_t region_end,
     std::shared_ptr<ReadInfo> other, uint32_t other_region_begin,
-    uint32_t other_region_end, bool rc) {
+    uint32_t other_region_end, uint32_t rc) {
 
     assert(this->begin_ <= region_begin && region_begin < this->end_);
     assert(this->begin_ < region_end && region_end <= this->end_);
