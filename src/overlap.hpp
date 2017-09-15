@@ -19,6 +19,14 @@ namespace bioparser {
 
 namespace rala {
 
+enum class OverlapType {
+    kX, // internal
+    kA, // b contained
+    kB, // a contained
+    kAB, // suffix prefix
+    kBA // prefix suffix
+};
+
 class Overlap {
 public:
     ~Overlap();
@@ -67,14 +75,13 @@ public:
         return orientation_;
     }
 
-    uint32_t type() const;
+    OverlapType type() const;
 
     bool update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
         uint32_t b_trimmed_begin, uint32_t b_trimmed_end);
 
     friend bioparser::MhapReader<Overlap>;
     friend bioparser::PafReader<Overlap>;
-
 private:
     Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error,
         uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,

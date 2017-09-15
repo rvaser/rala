@@ -48,7 +48,6 @@ public:
 
     friend bioparser::FastaReader<Read>;
     friend bioparser::FastqReader<Read>;
-
 private:
     Read(uint64_t id, const char* name, uint32_t name_length,
         const char* sequence, uint32_t sequence_length);
@@ -68,8 +67,7 @@ private:
 
 class ReadInfo;
 std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length);
-
-std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> read_info);
+std::unique_ptr<ReadInfo> copyReadInfo(std::shared_ptr<ReadInfo> other);
 
 class ReadInfo {
 public:
@@ -93,10 +91,6 @@ public:
         return end_;
     }
 
-    bool is_valid() const {
-        return is_valid_;
-    }
-
     uint16_t coverage_median() const {
         return coverage_median_;
     };
@@ -111,21 +105,15 @@ public:
     }
 
     /*!
-     * @brief Adds mappings to coverage_graph_
+     * @brief Adds overlaps to coverage_graph_
      */
-    void update_coverage_graph(std::vector<uint32_t>& mappings);
+    void update_coverage_graph(std::vector<uint32_t>& shrunken_overlaps);
 
     /*!
      * @brief Reduces coverage_graph_ by setting values outside the interval
      * [begin, end> to zeroes
      */
-    void reduce_coverage_graph(uint32_t begin, uint32_t end);
-
-    /*!
-     * @brief Clears coverage_graph_ and sets begin_ to 0, and end_ to
-     * coverage_graph_.size()
-     */
-    void reset_coverage_graph();
+    bool reduce_coverage_graph(uint32_t begin, uint32_t end);
 
     /*!
      * @biref Smooths coverage graph with 1D average filter
@@ -141,12 +129,12 @@ public:
 
     /*!
      * @brief Locates region in coverage_graph_ with values greater or equal to
-     * coverage;
+     * predefined value;
      * updates begin_, end_ and coverage_graph_ accordingly;
-     * if there is no such region (with valid coverage and longer than 500),
+     * if there is no such region (with valid coverage and longer than 1000),
      * object is invalidated
      */
-    void find_valid_region(uint32_t coverage);
+    bool find_valid_region();
 
     /*!
      * @brief Locates pits in coverage_graph_ which ought to indicate that the
@@ -156,8 +144,7 @@ public:
      * if the new area is shorter than 500, object is invalidated;
      * if no pits are found, false is returned
      */
-    bool find_coverage_pits(double slope_ratio, uint32_t min_slope_width,
-        double slope_width_ratio, uint16_t dataset_median);
+    bool find_coverage_pits(uint16_t dataset_median);
 
     /*!
      * @brief Returns regions of read which ought to be repetitive in the genome
@@ -170,23 +157,18 @@ public:
      * @brief Locates regions in coverage_graph_ which ought to be repetitive
      * in the genome and stores them in coverage_hills_
      */
-    void find_coverage_hills(double slope_ratio, uint32_t min_slope_width,
-        double slope_width_ratio, double hill_width_ratio,
-        uint16_t dataset_median);
-
-    void find_coverage_hills_simple(uint32_t min_coverage);
+    void find_coverage_hills(uint16_t dataset_median);
 
     /*!
      * @brief Print coverage_graph_ in csv format to path
      */
-    void print_csv(std::string path, uint16_t dataset_median) const;
+    void print_csv(std::string path, uint16_t dataset_median = 0) const;
 
     friend std::unique_ptr<ReadInfo> createReadInfo(uint64_t id,
         uint32_t read_length);
 
     friend std::unique_ptr<ReadInfo> copyReadInfo(
         std::shared_ptr<ReadInfo> read_info);
-
 private:
     ReadInfo(uint64_t id, uint32_t read_length);
     ReadInfo(const ReadInfo&) = default;
@@ -202,7 +184,6 @@ private:
     uint32_t begin_;
     uint32_t end_;
     uint16_t coverage_median_;
-    bool is_valid_;
     std::vector<uint16_t> coverage_graph_;
     std::vector<std::pair<uint32_t, uint32_t>> coverage_hills_;
 };

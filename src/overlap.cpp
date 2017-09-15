@@ -10,6 +10,8 @@
 
 namespace rala {
 
+constexpr double kMaxOverhangRatio = 0.875;
+
 Overlap::Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error,
     uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
     uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end,
@@ -86,7 +88,35 @@ bool Overlap::update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
     b_end_ = b_new_end;
     b_length_ = b_trimmed_end - b_trimmed_begin;
 
+    length_ = std::max(a_end_ - a_begin_, b_end_ - b_begin_);
+
     return true;
+}
+
+OverlapType Overlap::type() const {
+
+    uint32_t a_begin = a_begin_;
+    uint32_t a_end = a_end_;
+    uint32_t b_begin = orientation_ == 0 ? b_begin_ : b_length_ - b_end_;
+    uint32_t b_end = orientation_ == 0 ? b_end_ : b_length_ - b_begin_;
+
+    uint32_t overhang = std::min(a_begin, b_begin) + std::min(a_length_ -
+        a_end, b_length_ - b_end_);
+
+    if (a_end - a_begin < (a_end - a_begin + overhang) * kMaxOverhangRatio ||
+        b_end - b_begin < (b_end - b_begin + overhang) * kMaxOverhangRatio) {
+        return OverlapType::kX;
+    }
+    if (a_begin <= b_begin && a_length_ - a_end <= b_length_ - b_end) {
+        return OverlapType::kB;
+    }
+    if (a_begin >= b_begin && a_length_ - a_end >= b_length_ - b_end) {
+        return OverlapType::kA;
+    }
+    if (a_begin > b_begin) {
+        return OverlapType::kAB;
+    }
+    return OverlapType::kBA;
 }
 
 }

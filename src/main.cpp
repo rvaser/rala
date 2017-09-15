@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
     }
 
     auto graph = rala::createGraph(reads_path, overlaps_path, num_threads);
-    graph->initialize();
+    graph->construct();
 
     return 0;
 }

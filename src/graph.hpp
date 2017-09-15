@@ -32,26 +32,13 @@ std::unique_ptr<Graph> createGraph(const std::string& reads_path,
 
 class Graph {
 public:
-
     ~Graph();
-
-    /*!
-     * @brief Initializes all structures by reading the overlaps and trimming
-     * reads
-     */
-    void initialize();
-
-    /*!
-     * @brief Removes chimeric reads and those that do not bridge repetitive
-     * genomic regions
-     */
-    void preprocess();
 
     /*!
      * @brief Constructs the assembly graph by removing contained reads and
      * transitive overlaps
      */
-    void construct();
+    void construct(bool preprocess = true);
 
     /*!
      * @brief Removes nodes without edges (no information loss)
@@ -116,15 +103,25 @@ public:
 
     friend std::unique_ptr<Graph> createGraph(const std::string& reads_path,
         const std::string& overlaps_path, uint32_t num_threads);
-
 private:
-
     Graph(const std::string& reads_path, const std::string& overlaps_path,
         uint32_t num_threads);
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
 
     int32_t find_edge(uint32_t src, uint32_t dst);
+
+    /*!
+     * @brief Initializes all structures by reading the overlaps and trimming
+     * reads
+     */
+    void initialize();
+
+    /*!
+     * @brief Removes chimeric reads and those that do not bridge repetitive
+     * genomic regions
+     */
+    void preprocess();
 
     /*!
      * @brief Finds edges in path which if removed do not affect the connectivity
@@ -142,7 +139,7 @@ private:
     std::vector<std::unique_ptr<ReadInfo>> read_infos_;
 
     std::unique_ptr<bioparser::Reader<Overlap>> oreader_;
-    std::vector<bool> is_valid_overlap_;
+    std::vector<bool> overlap_infos_;
 
     std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
 

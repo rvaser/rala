@@ -614,11 +614,11 @@ void preprocessData(std::vector<std::shared_ptr<Read>>& reads, std::vector<std::
                 for (const auto& h: read_infos[it->a_id()]->coverage_hills()) {
                     if (begin < h.second && h.first < end) {
                         if (h.first < 0.1 * valid_read_length + read_infos[it->a_id()]->begin()) {
-                            if (end < h.second + fuzz) {
+                            if (end < h.second + 0.05 * valid_read_length) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         } else if (h.second > 0.9 * valid_read_length + read_infos[it->a_id()]->begin()) {
-                            if (begin > h.first - fuzz) {
+                            if (begin > h.first - 0.05 * valid_read_length) {
                                 is_valid_overlap[it->id()] = false;
                             }
                         }

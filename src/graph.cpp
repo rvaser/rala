@@ -15,8 +15,8 @@
 
 #include "read.hpp"
 #include "overlap.hpp"
-#include "timer.hpp"
 #include "graph.hpp"
+#include "timer.hpp"
 
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
@@ -24,15 +24,6 @@
 namespace rala {
 
 constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
-
-// preprocess
-constexpr uint32_t kMinCoverage = 3;
-constexpr double kMaxOverhangToOverlapRatio = 0.875;
-constexpr double kSlopeRatio = 1.3;
-constexpr uint32_t kSlopeWidth = 500;
-constexpr double kSlopeWidthRatio = 0.05;
-constexpr double kHillWidthRatio = 0.85;
-constexpr double kMedianRatio = 2;
 
 // assembly graph
 constexpr double kTransitiveEdgeEps = 0.12;
@@ -43,6 +34,31 @@ constexpr double kMaxOverlapRatio = 0.9;
 bool comparable(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
         (b >= a * (1 - eps) && b <= a * (1 + eps));
+}
+
+template<class T>
+void shrinkVector(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
+
+    uint64_t i = begin, j = begin;
+    for (; i < src.size(); ++i) {
+        if (src[i] != nullptr) {
+            continue;
+        }
+
+        j = std::max(j, i);
+        while (j < src.size() && src[j] == nullptr) {
+            ++j;
+        }
+
+        if (j >= src.size()) {
+            break;
+        } else if (i != j) {
+            src[i].swap(src[j]);
+        }
+    }
+    if (i < src.size()) {
+        src.resize(i);
+    }
 }
 
 class Graph::Node {
@@ -223,9 +239,8 @@ std::unique_ptr<Graph> createGraph(const std::string& reads_path,
 
 Graph::Graph(const std::string& reads_path, const std::string& overlaps_path,
     uint32_t num_threads)
-        : rreader_(nullptr), read_infos_(), oreader_(nullptr),
-        is_valid_overlap_(), thread_pool_(nullptr), nodes_(), edges_(),
-        marked_edges_() {
+        : rreader_(nullptr), read_infos_(), oreader_(nullptr), overlap_infos_(),
+        thread_pool_(nullptr), nodes_(), edges_(), marked_edges_() {
 
     thread_pool_ = thread_pool::createThreadPool(num_threads);
 
@@ -265,25 +280,21 @@ Graph::~Graph() {
 
 void Graph::initialize() {
 
-    if (!read_infos_.empty()) {
-        return;
-    }
-
     fprintf(stderr, "Graph::initialize {\n");
-    Timer init_timer;
-    init_timer.start();
+    Timer timer; timer.start();
 
+    // store overlaps
     std::vector<std::shared_ptr<Overlap>> current_overlaps;
-    std::vector<std::vector<uint32_t>> mappings;
+    std::vector<std::vector<uint32_t>> shrunken_overlaps;
+    uint32_t num_duplicate_overlaps = 0;
 
-    auto remove_duplicate_overlaps = [&]() -> uint32_t {
-        uint32_t num_duplicate_overlaps = 0;
+    auto remove_duplicate_overlaps = [&]() -> void {
         for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
-            if (is_valid_overlap_[current_overlaps[i]->id()] == false) {
+            if (!overlap_infos_[current_overlaps[i]->id()]) {
                 continue;
             }
             for (uint32_t j = i + 1; j < current_overlaps.size(); ++j) {
-                if (is_valid_overlap_[current_overlaps[j]->id()] == false ||
+                if (!overlap_infos_[current_overlaps[j]->id()] ||
                     current_overlaps[i]->b_id() != current_overlaps[j]->b_id()) {
                     continue;
                 }
@@ -291,26 +302,26 @@ void Graph::initialize() {
 
                 if (current_overlaps[i]->length() >
                     current_overlaps[j]->length()) {
-                    is_valid_overlap_[current_overlaps[j]->id()] = false;
+                    overlap_infos_[current_overlaps[j]->id()] = false;
                 } else {
-                    is_valid_overlap_[current_overlaps[i]->id()] = false;
+                    overlap_infos_[current_overlaps[i]->id()] = false;
                     break;
                 }
             }
         }
-        return num_duplicate_overlaps;
+        return;
     };
 
-    auto save_valid_overlaps = [&]() -> void {
+    auto shrink_valid_overlaps = [&]() -> void {
         for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
-            if (is_valid_overlap_[current_overlaps[i]->id()]) {
-                mappings[current_overlaps[i]->a_id()].push_back(
+            if (overlap_infos_[current_overlaps[i]->id()]) {
+                shrunken_overlaps[current_overlaps[i]->a_id()].push_back(
                     (current_overlaps[i]->a_begin() + 1) << 1 | 0);
-                mappings[current_overlaps[i]->a_id()].push_back(
+                shrunken_overlaps[current_overlaps[i]->a_id()].push_back(
                     (current_overlaps[i]->a_end() - 1) << 1 | 1);
-                mappings[current_overlaps[i]->b_id()].push_back(
+                shrunken_overlaps[current_overlaps[i]->b_id()].push_back(
                     (current_overlaps[i]->b_begin() + 1) << 1 | 0);
-                mappings[current_overlaps[i]->b_id()].push_back(
+                shrunken_overlaps[current_overlaps[i]->b_id()].push_back(
                     (current_overlaps[i]->b_end() - 1) << 1 | 1);
             }
         }
@@ -318,35 +329,33 @@ void Graph::initialize() {
     };
 
     std::vector<uint32_t> read_lengths;
-    uint32_t num_duplicate_overlaps = 0;
     uint32_t num_self_overlaps = 0;
 
-    this->oreader_->rewind();
+    std::vector<std::future<void>> thread_futures;
 
+    oreader_->rewind();
     while (true) {
         std::vector<std::shared_ptr<Overlap>> overlaps;
-        auto status = this->oreader_->read_objects(overlaps, kChunkSize);
+        auto status = oreader_->read_objects(overlaps, kChunkSize);
 
-        is_valid_overlap_.resize(is_valid_overlap_.size() + overlaps.size(),
-            true);
+        overlap_infos_.resize(overlap_infos_.size() + overlaps.size(), true);
 
         for (const auto& it: overlaps) {
-
             uint32_t max_read_id = std::max(it->a_id(), it->b_id());
-            if (mappings.size() <= max_read_id) {
-                mappings.resize(max_read_id + 1);
+            if (shrunken_overlaps.size() <= max_read_id) {
+                shrunken_overlaps.resize(max_read_id + 1);
                 read_lengths.resize(max_read_id + 1);
             }
 
-            if (read_infos_.size() < max_read_id) {
+            if (read_infos_.size() <= max_read_id) {
                 read_infos_.resize(max_read_id + 1);
             }
 
             read_lengths[it->a_id()] = it->a_length();
 
-            // self overlap check
+            // self overlap check TODO: remove chimeric reads!
             if (it->a_id() == it->b_id()) {
-                is_valid_overlap_[it->id()] = false;
+                overlap_infos_[it->id()] = false;
                 ++num_self_overlaps;
                 continue;
             }
@@ -356,53 +365,46 @@ void Graph::initialize() {
             if (current_overlaps.size() != 0 &&
                 current_overlaps.front()->a_id() != it->a_id()) {
 
-                num_duplicate_overlaps += remove_duplicate_overlaps();
-                save_valid_overlaps();
+                remove_duplicate_overlaps();
+                shrink_valid_overlaps();
             }
             current_overlaps.push_back(it);
         }
 
         overlaps.clear();
 
-        if (status == false) {
-            num_duplicate_overlaps += remove_duplicate_overlaps();
-            save_valid_overlaps();
+        if (!status) {
+            remove_duplicate_overlaps();
+            shrink_valid_overlaps();
         }
 
-        // create missing coverage graphs
-        for (uint32_t i = 0; i < mappings.size(); ++i) {
-            if (read_infos_[i] != nullptr || mappings[i].empty()) {
+        // create missing and update all coverage graphs
+        for (uint32_t i = 0; i < shrunken_overlaps.size(); ++i) {
+            if (shrunken_overlaps[i].empty()) {
                 continue;
             }
-            read_infos_[i] = createReadInfo(i, read_lengths[i]);
-        }
 
-        // update coverage graphs
-        std::vector<std::future<void>> thread_futures;
-        std::vector<uint32_t> task_ids;
-        for (uint32_t i = 0; i < mappings.size(); ++i) {
             if (read_infos_[i] == nullptr) {
-                continue;
+                read_infos_[i] = createReadInfo(i, read_lengths[i]);
             }
 
             thread_futures.emplace_back(thread_pool_->submit_task(
                 [&](uint32_t id) -> void {
-                    read_infos_[id]->update_coverage_graph(mappings[id]);
+                    read_infos_[id]->update_coverage_graph(shrunken_overlaps[id]);
+                    std::vector<uint32_t>().swap(shrunken_overlaps[id]);
                 }, i));
-            task_ids.emplace_back(i);
         }
         for (uint32_t i = 0; i < thread_futures.size(); ++i) {
             thread_futures[i].wait();
-            std::vector<uint32_t>().swap(mappings[task_ids[i]]);
         }
+        thread_futures.clear();
 
-        if (status == false) {
+        if (!status) {
             break;
         }
     }
 
     // trim reads
-    std::vector<std::future<void>> thread_futures;
     for (uint32_t i = 0; i < read_infos_.size(); ++i) {
         if (read_infos_[i] == nullptr) {
             continue;
@@ -410,19 +412,17 @@ void Graph::initialize() {
 
         thread_futures.emplace_back(thread_pool_->submit_task(
             [&](uint32_t id) -> void {
-                read_infos_[id]->find_valid_region(kMinCoverage);
-                if (read_infos_[id]->is_valid() == false) {
+                if (!read_infos_[id]->find_valid_region()) {
                     read_infos_[id].reset();
-                }
+                };
             }, i));
     }
     for (uint32_t i = 0; i < thread_futures.size(); ++i) {
         thread_futures[i].wait();
     }
+    thread_futures.clear();
 
     // log
-    init_timer.stop();
-
     uint32_t num_prefiltered_reads = 0;
     for (uint32_t i = 0; i < read_infos_.size(); ++i) {
         if (read_infos_[i] == nullptr) {
@@ -433,15 +433,228 @@ void Graph::initialize() {
     fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
     fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
     fprintf(stderr, "  number of prefiltered reads = %u\n", num_prefiltered_reads);
-    init_timer.print("  time =");
+    timer.stop(); timer.print("  time =");
     fprintf(stderr, "}\n");
 }
 
 void Graph::preprocess() {
 
+    fprintf(stderr, "Graph::preprocess {\n");
+    Timer timer; timer.start();
+
+    // find coverage median of the dataset
+    std::vector<std::future<void>> thread_futures;
+    for (uint32_t i = 0; i < read_infos_.size(); ++i) {
+        if (read_infos_[i] == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t id) {
+                read_infos_[id]->find_coverage_median();
+            }, i));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    std::vector<uint16_t> medians;
+    for (uint32_t i = 0; i < read_infos_.size(); ++i) {
+        if (read_infos_[i] == nullptr) {
+            continue;
+        }
+        medians.emplace_back(read_infos_[i]->coverage_median());
+    }
+
+    std::sort(medians.begin(), medians.end());
+    uint32_t dataset_coverage_median = medians.size() % 2 == 1 ?
+        medians[medians.size() / 2] :
+        (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
+    fprintf(stderr, "  dataset coverage median = %u\n", dataset_coverage_median);
+
+    // find chimeric reads
+    for (uint32_t i = 0; i < read_infos_.size(); ++i) {
+        if (read_infos_[i] == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t id) {
+                if (!read_infos_[id]->find_coverage_pits(dataset_coverage_median)) {
+                    read_infos_[id].reset();
+                }
+            }, i));
+    }
+    for (auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    // correct coverage graphs
+    {}
+
+    // find repetitive regions
+    for (uint32_t i = 0; i < read_infos_.size(); ++i) {
+        if (read_infos_[i] == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t id) {
+                read_infos_[id]->find_coverage_hills(dataset_coverage_median);
+            }, i));
+    }
+    for (auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    // log
+    uint32_t num_left_repeats = 0, num_right_repeats = 0;
+    for (const auto& it: read_infos_) {
+        if (it == nullptr) {
+            continue;
+        }
+
+        uint32_t valid_read_length = it->end() - it->begin();
+        for (const auto& hill: it->coverage_hills()) {
+            if (hill.first < 0.1 * valid_read_length + it->begin()) {
+                ++num_left_repeats;
+            } else if (hill.second > 0.9 * valid_read_length + it->begin()) {
+                ++num_right_repeats;
+            }
+        }
+    }
+
+    fprintf(stderr, "  number of left repeat reads = %u\n", num_left_repeats);
+    fprintf(stderr, "  number of right repeat reads = %u\n", num_right_repeats);
+
+    timer.stop(); timer.print("  time =");
+    fprintf(stderr, "}\n");
 }
 
-void Graph::construct() {
+void Graph::construct(bool preprocess) {
+
+    nodes_.clear();
+    edges_.clear();
+    marked_edges_.clear();
+
+    this->initialize();
+    if (preprocess) {
+        this->preprocess();
+    }
+
+    fprintf(stderr, "Graph::construct {\n");
+    Timer timer; timer.start();
+
+    // store overlaps
+    std::vector<std::unique_ptr<Overlap>> overlaps;
+    oreader_->rewind();
+    while (true) {
+        uint64_t current_overlap_id = overlaps.size();
+        auto status = oreader_->read_objects(overlaps, kChunkSize);
+
+        for (uint64_t i = current_overlap_id; i < overlaps.size(); ++i) {
+            auto& it = overlaps[i];
+            if (!overlap_infos_[it->id()]) {
+                it.reset();
+                continue;
+            }
+            if (read_infos_[it->a_id()] == nullptr ||
+                read_infos_[it->b_id()] == nullptr) {
+                it.reset();
+                continue;
+            }
+
+            // check for false overlaps
+            {}
+
+            if(!it->update(read_infos_[it->a_id()]->begin(),
+                read_infos_[it->a_id()]->end(),
+                read_infos_[it->b_id()]->begin(),
+                read_infos_[it->b_id()]->end())) {
+
+                it.reset();
+                continue;
+            }
+
+            switch (it->type()) {
+                case OverlapType::kX:
+                    it.reset();
+                    break;
+                case OverlapType::kB:
+                    read_infos_[it->a_id()].reset();
+                    it.reset();
+                    break;
+                case OverlapType::kA:
+                    read_infos_[it->b_id()].reset();
+                    it.reset();
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        shrinkVector(overlaps, current_overlap_id);
+
+        if (!status) {
+            break;
+        }
+    }
+    std::vector<bool>().swap(overlap_infos_);
+
+    // check if all non valid overlaps are deleted
+    for (uint64_t i = 0; i < overlaps.size(); ++i) {
+        auto& it = overlaps[i];
+        if (read_infos_[it->a_id()] == nullptr ||
+            read_infos_[it->b_id()] == nullptr) {
+
+            it.reset();
+        }
+    }
+    shrinkVector(overlaps, 0);
+
+    // store reads
+    std::vector<std::unique_ptr<Read>> reads;
+    rreader_->rewind();
+    while (true) {
+        uint64_t current_read_id = reads.size();
+        auto status = rreader_->read_objects(reads, kChunkSize);
+
+        for (uint64_t i = current_read_id; i < reads.size(); ++i) {
+            auto& it = reads[i];
+            if (it->id() >= read_infos_.size()) {
+                it.reset();
+                continue;
+            }
+            if (read_infos_[it->id()] == nullptr) {
+                it.reset();
+                continue;
+            }
+            it->update(read_infos_[it->id()]->begin(),
+                read_infos_[it->id()]->end());
+            read_infos_[it->id()].reset();
+        }
+
+        shrinkVector(reads, current_read_id);
+
+        if (!status) {
+            break;
+        }
+    }
+    std::vector<std::unique_ptr<ReadInfo>>().swap(read_infos_);
+
+    timer.stop(); timer.print("  time =");
+    fprintf(stderr, "}\n");
+
+    // log
+    // uint64_t num_valid_reads = 0, num_valid_overlaps = 0;
+    // for (const auto& it: is_valid_read) if (ite) ++num_valid_reads;
+    // for (const auto& it: is_valid_overlap) if (it == true) ++num_valid_overlaps;
+    // fprintf(stderr, "    number of valid overlaps = %lu (out of %lu)\n", num_valid_overlaps, is_valid_overlap.size());
+    // fprintf(stderr, "    number of valid reads = %lu (out of %lu)\n", num_valid_reads, is_valid_read.size());
+
     /*uint64_t max_read_id = 0;
     for (const auto& it: reads) {
         max_read_id = std::max(max_read_id, it->id());
