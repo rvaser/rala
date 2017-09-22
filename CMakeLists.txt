@@ -12,7 +12,6 @@ add_executable(rala
     src/graph.cpp
     src/main.cpp
     src/overlap.cpp
-    src/preprocess.cpp
     src/read.cpp
     src/timer.cpp)
 

@@ -101,7 +101,7 @@ OverlapType Overlap::type() const {
     uint32_t b_end = orientation_ == 0 ? b_end_ : b_length_ - b_begin_;
 
     uint32_t overhang = std::min(a_begin, b_begin) + std::min(a_length_ -
-        a_end, b_length_ - b_end_);
+        a_end, b_length_ - b_end);
 
     if (a_end - a_begin < (a_end - a_begin + overhang) * kMaxOverhangRatio ||
         b_end - b_begin < (b_end - b_begin + overhang) * kMaxOverhangRatio) {

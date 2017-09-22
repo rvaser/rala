@@ -58,6 +58,9 @@ int main(int argc, char** argv) {
 
     auto graph = rala::createGraph(reads_path, overlaps_path, num_threads);
     graph->construct();
+    graph->simplify();
+    graph->print_csv("assembly_graph.csv");
+    graph->print_contigs();
 
     return 0;
 }
