@@ -20,7 +20,7 @@ namespace bioparser {
 namespace rala {
 
 enum class OverlapType {
-    kX, // internal
+    kX, // bad overlap
     kA, // b contained
     kB, // a contained
     kAB, // suffix prefix

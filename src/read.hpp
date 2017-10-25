@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace bioparser {
     template<class T>
@@ -94,7 +95,10 @@ public:
     };
 
     const std::vector<uint16_t>& coverage_graph() const {
-        return coverage_graph_;
+        if (corrected_coverage_graph_.empty()) {
+            return coverage_graph_;
+        }
+        return corrected_coverage_graph_;
     }
 
     /*!
@@ -123,29 +127,27 @@ public:
      * @brief Locates region in coverage_graph_ with values greater or equal to
      * predefined coverage; updates begin_, end_ and coverage_graph_ accordingly;
      * if there is no such region (with valid coverage and longer than 1000),
-     * object is invalidated
+     * false is returned
      */
     bool find_valid_region();
 
     /*!
-     * @brief Locates pits in coverage_graph_ which ought to indicate that the
-     * read is chimeric;
-     * if a pit is found, both begin_ and end_ are set to the longest continuous
-     * region of the read and coverage_graph_ is updated accordingly;
-     * if the new area is shorter than 500, object is invalidated;
-     * if no pits are found, false is returned
+     * @brief Locates chimeric regions in coverage_graph_;
+     * if any such region is found, both begin_ and end_ are set to the longest
+     * continuous region of the read and coverage_graph_ is updated accordingly;
+     * if the new area is shorter than 1000, false is returned
      */
-    bool find_coverage_pits(uint16_t dataset_median);
+    bool find_chimeric_region(uint16_t dataset_median);
 
     /*!
      * @brief Locates regions in coverage_graph_ which ought to be repetitive
      * in the genome and stores them in coverage_hills_
      */
-    void find_coverage_hills(uint16_t dataset_median);
+    void find_repetitive_region(uint16_t dataset_median);
 
     /*!
-     * @brief Checks whether overlap [begin, end> is wrong due to repetitive
-     * nature of the genome
+     * @brief Checks whether overlap [begin, end> is valid with respect to
+     * coverage_hills_ which indicate repetitive regions of the genome
      */
     bool is_valid_overlap(uint32_t begin, uint32_t end) const;
 
@@ -161,9 +163,12 @@ private:
     ReadInfo(const ReadInfo&) = delete;
     const ReadInfo& operator=(const ReadInfo&) = delete;
 
+    std::vector<std::pair<uint32_t, uint32_t>> find_coverage_slopes(double q);
+
     uint64_t id_;
     uint32_t begin_;
     uint32_t end_;
+    uint16_t coverage_q1_;
     uint16_t coverage_median_;
     std::vector<uint16_t> coverage_graph_;
     std::vector<uint16_t> corrected_coverage_graph_;

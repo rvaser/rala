@@ -142,7 +142,8 @@ public:
     bool mark;
 };
 
-Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered_set<uint32_t>& marked_edges) :
+Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node,
+    std::unordered_set<uint32_t>& marked_edges) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
         read_ids(), unitig_size(), mark(false) {
 
@@ -159,7 +160,8 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
         marked_edges.insert(edge->id);
 
         read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
-        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(), curr_node->read_ids.end());
+        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(),
+            curr_node->read_ids.end());
 
         unitig_size += curr_node->unitig_size;
         length += edge->length;
@@ -173,7 +175,8 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
     }
 
     read_ids.reserve(read_ids.size() + end_node->read_ids.size());
-    read_ids.insert(read_ids.end(), end_node->read_ids.begin(), end_node->read_ids.end());
+    read_ids.insert(read_ids.end(), end_node->read_ids.begin(),
+        end_node->read_ids.end());
 
     unitig_size += end_node->unitig_size;
     sequence += end_node->sequence;
@@ -189,21 +192,21 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node, std::unordered
     end_node->mark = true;
 }
 
-Graph::Node::Node(uint32_t _id, Node* begin_node, std::unordered_set<uint32_t>& marked_edges) :
+Graph::Node::Node(uint32_t _id, Node* begin_node,
+    std::unordered_set<uint32_t>& marked_edges) :
         id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
         read_ids(), unitig_size(), mark(false) {
-    // fprintf(stderr, "!!! CIRCULAR UNITIG ALERT !!!\n");
 
     uint32_t length = 0;
     Node* curr_node = begin_node;
     while (true) {
-        // fprintf(stderr, "Curr node = %d\n", curr_node->id);
         auto* edge = curr_node->suffix_edges.front();
         edge->mark = true;
         marked_edges.insert(edge->id);
 
         read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
-        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(), curr_node->read_ids.end());
+        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(),
+            curr_node->read_ids.end());
 
         unitig_size += curr_node->unitig_size;
         length += edge->length;
@@ -466,24 +469,6 @@ void Graph::preprocess() {
         (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
     fprintf(stderr, "  - dataset coverage median = %u\n", coverage_median_);
 
-    // find chimeric reads
-    for (const auto& it: read_infos_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t id) -> void {
-                if (!read_infos_[id]->find_coverage_pits(coverage_median_)) {
-                    read_infos_[id].reset();
-                }
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
     // filter low quality reads
     uint32_t num_low_quality_reads = 0;
     for (auto& it: read_infos_) {
@@ -496,6 +481,24 @@ void Graph::preprocess() {
         }
     }
     fprintf(stderr, "  number of low quality reads = %u\n", num_low_quality_reads);
+
+    // find chimeric reads
+    for (const auto& it: read_infos_) {
+        if (it == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t id) -> void {
+                if (!read_infos_[id]->find_chimeric_region(coverage_median_)) {
+                    read_infos_[id].reset();
+                }
+            }, it->id()));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
 
     // correct coverage graphs
     std::vector<std::vector<uint32_t>> shrunken_overlaps(read_infos_.size());
@@ -599,7 +602,7 @@ void Graph::preprocess() {
 
         thread_futures.emplace_back(thread_pool_->submit_task(
             [&](uint32_t id) -> void {
-                read_infos_[id]->find_coverage_hills(coverage_median_);
+                read_infos_[id]->find_repetitive_region(coverage_median_);
             }, it->id()));
     }
     for (const auto& it: thread_futures) {
