@@ -101,6 +101,10 @@ public:
         return corrected_coverage_graph_;
     }
 
+    void add_coverage_hill(uint32_t begin, uint32_t end) {
+        coverage_hills_.emplace_back(begin, end);
+    }
+
     /*!
      * @brief Adds overlaps to coverage_graph_
      */
@@ -168,7 +172,7 @@ private:
     uint64_t id_;
     uint32_t begin_;
     uint32_t end_;
-    uint16_t coverage_q1_;
+    uint16_t coverage_p10_;
     uint16_t coverage_median_;
     std::vector<uint16_t> coverage_graph_;
     std::vector<uint16_t> corrected_coverage_graph_;

@@ -68,7 +68,7 @@ public:
         const std::string& _sequence)
             : id(_id), read_id(_read_id), pair(), sequence(_sequence),
             prefix_edges(), suffix_edges(), read_ids(1, _read_id),
-            unitig_size(1), mark(false) {
+            unitig_size(1), mark(false), rc(id % 2) {
 
         auto is_unitig = read_name.find("Utg=");
         if (is_unitig != std::string::npos) {
@@ -116,6 +116,7 @@ public:
     std::vector<uint32_t> read_ids;
     uint32_t unitig_size;
     bool mark;
+    bool rc;
 };
 
 class Graph::Edge {
@@ -190,6 +191,8 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node,
     end_node->prefix_edges.clear();
     end_node->suffix_edges.clear();
     end_node->mark = true;
+
+    rc = begin_node->rc;
 }
 
 Graph::Node::Node(uint32_t _id, Node* begin_node,
@@ -221,6 +224,8 @@ Graph::Node::Node(uint32_t _id, Node* begin_node,
             break;
         }
     }
+
+    rc = begin_node->rc;
 }
 
 std::unique_ptr<Graph> createGraph(const std::string& reads_path,
@@ -310,16 +315,10 @@ void Graph::initialize() {
 
     auto shrink_valid_overlaps = [&]() -> void {
         for (const auto& it: current_overlaps) {
-            if (overlap_infos_[it->id()]) {
-                shrunken_overlaps[it->a_id()].push_back(
-                    (it->a_begin() + 1) << 1 | 0);
-                shrunken_overlaps[it->a_id()].push_back(
-                    (it->a_end() - 1) << 1 | 1);
-                shrunken_overlaps[it->b_id()].push_back(
-                    (it->b_begin() + 1) << 1 | 0);
-                shrunken_overlaps[it->b_id()].push_back(
-                    (it->b_end() - 1) << 1 | 1);
-            }
+            shrunken_overlaps[it->a_id()].push_back((it->a_begin() + 1) << 1 | 0);
+            shrunken_overlaps[it->a_id()].push_back((it->a_end() - 1) << 1 | 1);
+            shrunken_overlaps[it->b_id()].push_back((it->b_begin() + 1) << 1 | 0);
+            shrunken_overlaps[it->b_id()].push_back((it->b_end() - 1) << 1 | 1);
         }
         current_overlaps.clear();
     };
@@ -328,6 +327,8 @@ void Graph::initialize() {
     uint32_t num_self_overlaps = 0;
 
     std::vector<std::future<void>> thread_futures;
+
+    std::vector<std::shared_ptr<Overlap>> self_overlaps;
 
     oreader_->rewind();
     while (true) {
@@ -351,6 +352,9 @@ void Graph::initialize() {
 
             // self overlap check TODO: remove chimeric reads!
             if (it->a_id() == it->b_id()) {
+                if (it->orientation() == 0) {
+                    self_overlaps.emplace_back(it);
+                }
                 overlap_infos_[it->id()] = false;
                 ++num_self_overlaps;
                 continue;
@@ -398,6 +402,23 @@ void Graph::initialize() {
         if (!status) {
             std::vector<std::vector<uint32_t>>().swap(shrunken_overlaps);
             break;
+        }
+    }
+
+    {
+        uint32_t current_id = self_overlaps.front()->a_id();
+        uint32_t new_begin = read_lengths[current_id], new_end = 0;
+        for (const auto& it: self_overlaps) {
+            if (it->a_id() != current_id) {
+                if (read_infos_[current_id] != nullptr && new_begin < new_end) {
+                    read_infos_[current_id]->add_coverage_hill(new_begin, new_end);
+                }
+                current_id = it->a_id();
+                new_begin = read_lengths[current_id];
+                new_end = 0;
+            }
+            new_begin = std::min(new_begin, std::min(it->a_begin(), it->b_begin()));
+            new_end = std::max(new_end, std::max(it->a_end(), it->b_end()));
         }
     }
 
@@ -508,7 +529,7 @@ void Graph::preprocess() {
         auto status = oreader_->read_objects(overlaps, kChunkSize);
 
         for (auto& it: overlaps) {
-            if (!overlap_infos_[it->id()] ||
+            if (it->a_id() == it->b_id() ||
                 read_infos_[it->a_id()] == nullptr ||
                 read_infos_[it->b_id()] == nullptr) {
                 it.reset();
@@ -921,21 +942,21 @@ uint32_t Graph::remove_long_edges() {
             continue;
         }
 
-        for (const auto& edge1: node->suffix_edges) {
-            for (const auto& edge2: node->suffix_edges) {
-                if (edge1->id == edge2->id ||
-                    edge1->mark == true ||
-                    edge2->mark == true) {
+        for (const auto& edge: node->suffix_edges) {
+            for (const auto& other_edge: node->suffix_edges) {
+                if (edge->id == other_edge->id ||
+                    edge->mark == true ||
+                    other_edge2->mark == true) {
 
                     continue;
                 }
-                if (node->length() - edge2->length <
-                    (node->length() - edge1->length) * kMaxOverlapRatio) {
+                if (node->length() - other_edge->length <
+                    (node->length() - edge->length) * kMaxOverlapRatio) {
 
-                    edge2->mark = true;
-                    edge2->pair->mark = true;
-                    marked_edges_.insert(edge2->id);
-                    marked_edges_.insert(edge2->pair->id);
+                    other_edge->mark = true;
+                    other_edge->pair->mark = true;
+                    marked_edges_.insert(other_edge->id);
+                    marked_edges_.insert(other_edge->pair->id);
                     ++num_long_edges;
                 }
             }
@@ -1368,21 +1389,22 @@ void Graph::print_knots() const {
     std::vector<bool> visited(edges_.size(), false);
 
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->suffix_edges.size() < 2) {
+        if (node == nullptr || (node->suffix_edges.size() < 2 && node->prefix_edges.size() < 2)) {
             continue;
         }
-        if (read_infos_[node->read_id] == nullptr) {
+        uint32_t read_id = node->read_ids.front();
+        if (read_infos_[read_id] == nullptr) {
             continue;
         }
 
-        std::vector<uint16_t> graph1(read_infos_[node->read_id]->coverage_graph());
-        uint32_t begin1 = read_infos_[node->read_id]->begin();
-        uint32_t end1 = read_infos_[node->read_id]->end();
-        if (node->id % 2 != 0) {
-            std::reverse(graph1.begin(), graph1.end());
-            uint32_t tmp = begin1;
-            begin1 = graph1.size() - end1;
-            end1 = graph1.size() - tmp;
+        std::vector<uint16_t> coverage_graph(read_infos_[read_id]->coverage_graph());
+        uint32_t begin = read_infos_[read_id]->begin();
+        uint32_t end = read_infos_[read_id]->end();
+        if (node->rc) {
+            std::reverse(coverage_graph.begin(), coverage_graph.end());
+            uint32_t tmp = begin;
+            begin = coverage_graph.size() - end;
+            end = coverage_graph.size() - tmp;
         }
 
         for (const auto& edge: node->suffix_edges) {
@@ -1392,29 +1414,31 @@ void Graph::print_knots() const {
             visited[edge->id] = true;
             visited[edge->pair->id] = true;
 
-            uint32_t id = edge->end_node->read_id;
-            if (read_infos_[id] == nullptr) {
+            uint32_t other_read_id = edge->end_node->read_ids.front();
+            if (read_infos_[other_read_id] == nullptr) {
                 continue;
             }
 
-            std::vector<uint16_t> graph2(read_infos_[id]->coverage_graph());
-            uint32_t begin2 = read_infos_[id]->begin();
-            uint32_t end2 = read_infos_[id]->end();
-            if (edge->end_node->id % 2 != 0) {
-                std::reverse(graph2.begin(), graph2.end());
-                uint32_t tmp = begin2;
-                begin2 = graph2.size() - end2;
-                end2 = graph2.size() - tmp;
+            std::vector<uint16_t> other_coverage_graph(
+                read_infos_[other_read_id]->coverage_graph());
+            uint32_t other_begin = read_infos_[other_read_id]->begin();
+            uint32_t other_end = read_infos_[other_read_id]->end();
+            if (edge->end_node->rc) {
+                std::reverse(other_coverage_graph.begin(), other_coverage_graph.end());
+                uint32_t tmp = other_begin;
+                other_begin = other_coverage_graph.size() - other_end;
+                other_end = other_coverage_graph.size() - tmp;
             }
 
             std::ofstream out("graphs/e" + std::to_string(edge->id));
-            out << "x " << node->read_id << " " << id << " median diff" << std::endl;
-            for (uint32_t i = 0; i < begin1 + edge->length + (end2 - begin2); ++i) {
-                uint32_t g1 = (i < graph1.size() ? graph1[i] : 0);
-                uint32_t g2 = (i < begin1 + edge->length ? 0 :
-                    graph2[i - (edge->length + begin1) + begin2]);
-                out << i << " " << g1 << " " << g2 << " " << coverage_median_
-                    << " " << (int32_t) (g1 - g2) << std::endl;
+            out << "x " << read_id << " " << other_read_id << " median"
+                << std::endl;
+            for (uint32_t i = 0; i < begin + edge->length + (other_end - other_begin); ++i) {
+                uint32_t g = (i < coverage_graph.size() ? coverage_graph[i] : 0);
+                uint32_t other_g = (i < begin + edge->length ? 0 :
+                    other_coverage_graph[i - (edge->length + begin) + other_begin]);
+                out << i << " " << g << " " << other_g << " " << coverage_median_
+                    << std::endl;
             }
             out.close();
         }

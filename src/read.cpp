@@ -23,15 +23,14 @@ enum class CoverageHillType {
 
 CoverageHillType checkCoverageHill(const std::pair<uint32_t, uint32_t>& hill_begin,
     const std::pair<uint32_t, uint32_t>& hill_end, uint32_t dataset_median,
-    uint32_t read_length, const std::vector<uint16_t>& coverage_graph) {
+    const std::vector<uint16_t>& coverage_graph, uint32_t begin, uint32_t end) {
 
-    if (hill_end.second - (hill_begin.first >> 1) > 0.84 * read_length) {
+    if (hill_end.second - (hill_begin.first >> 1) > 0.84 * (end - begin)) {
         return CoverageHillType::kInvalid;
     }
 
     bool found_peak = false;
-    uint32_t peak_value = 1.3 * std::max(
-        coverage_graph[hill_begin.second],
+    uint32_t peak_value = 1.3 * std::max(coverage_graph[hill_begin.second],
         coverage_graph[hill_end.first >> 1]);
 
     uint32_t valid_points = 0;
@@ -49,7 +48,10 @@ CoverageHillType checkCoverageHill(const std::pair<uint32_t, uint32_t>& hill_beg
         return CoverageHillType::kInvalid;
     }
     if (valid_points < 0.84 * ((hill_end.first >> 1) - hill_begin.second)) {
-        if ((hill_end.first >> 1) - hill_begin.second < 596) {
+        if ((hill_end.first >> 1) - hill_begin.second < 596 &&
+            (hill_begin.first >> 1) > 0.05 * (end - begin) + begin &&
+            (hill_end.second) < 0.95 * (end - begin) + begin) {
+
             return CoverageHillType::kChimeric;
         }
         return CoverageHillType::kNormal;
@@ -145,7 +147,7 @@ std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length) {
 }
 
 ReadInfo::ReadInfo(uint64_t id, uint32_t read_length)
-        : id_(id), begin_(0), end_(read_length), coverage_q1_(0), coverage_median_(0),
+        : id_(id), begin_(0), end_(read_length), coverage_p10_(0), coverage_median_(0),
         coverage_graph_(end_ - begin_ + 1, 0), corrected_coverage_graph_(),
         coverage_hills_() {
 }
@@ -440,7 +442,7 @@ void ReadInfo::find_coverage_median() {
         coverage_graph_.begin() + end_);
     std::sort(tmp.begin(), tmp.end());
 
-    coverage_q1_ = tmp[tmp.size() / 4];
+    coverage_p10_ = tmp[tmp.size() / 10];
 
     coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] :
         (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
@@ -479,7 +481,7 @@ bool ReadInfo::find_valid_region() {
 bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
 
     if (coverage_median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, coverage_q1_);
+        dataset_median = std::max(dataset_median, coverage_p10_);
     }
 
     // look for chimeric pits
@@ -544,7 +546,7 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
             }
             found_hill = true;
             auto hill_type = checkCoverageHill(slope_regions[i], slope_regions[j],
-                dataset_median, end_ - begin_, coverage_graph_);
+                dataset_median, coverage_graph_, begin_, end_);
 
             if (hill_type == CoverageHillType::kChimeric) {
                 uint32_t begin = slope_regions[i].second - 0.126 *
@@ -583,14 +585,12 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
 
 void ReadInfo::find_repetitive_region(uint16_t dataset_median) {
 
-    coverage_hills_.clear();
-
     if (!corrected_coverage_graph_.empty()) {
         corrected_coverage_graph_.swap(coverage_graph_);
     }
 
     if (coverage_median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, coverage_q1_);
+        dataset_median = std::max(dataset_median, coverage_p10_);
     }
 
     auto slope_regions = this->find_coverage_slopes(1.3);
@@ -610,12 +610,12 @@ void ReadInfo::find_repetitive_region(uint16_t dataset_median) {
             }
             found_hill = true;
             auto hill_type = checkCoverageHill(slope_regions[i], slope_regions[j],
-                dataset_median, end_ - begin_, coverage_graph_);
+                dataset_median, coverage_graph_, begin_, end_);
 
             if (hill_type == CoverageHillType::kRepeat) {
-                uint32_t begin = slope_regions[i].second - 0.126 *
+                uint32_t begin = slope_regions[i].second - 0.336 *
                     (slope_regions[i].second - (slope_regions[i].first >> 1));
-                uint32_t end = (slope_regions[j].first >> 1) + 0.126 *
+                uint32_t end = (slope_regions[j].first >> 1) + 0.336 *
                     (slope_regions[j].second - (slope_regions[j].first >> 1));
 
                 repeat_hills.emplace_back(begin, end);
