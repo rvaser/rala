@@ -946,7 +946,7 @@ uint32_t Graph::remove_long_edges() {
             for (const auto& other_edge: node->suffix_edges) {
                 if (edge->id == other_edge->id ||
                     edge->mark == true ||
-                    other_edge2->mark == true) {
+                    other_edge->mark == true) {
 
                     continue;
                 }
