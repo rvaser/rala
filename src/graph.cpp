@@ -405,23 +405,6 @@ void Graph::initialize() {
         }
     }
 
-    {
-        uint32_t current_id = self_overlaps.front()->a_id();
-        uint32_t new_begin = read_lengths[current_id], new_end = 0;
-        for (const auto& it: self_overlaps) {
-            if (it->a_id() != current_id) {
-                if (read_infos_[current_id] != nullptr && new_begin < new_end) {
-                    read_infos_[current_id]->add_coverage_hill(new_begin, new_end);
-                }
-                current_id = it->a_id();
-                new_begin = read_lengths[current_id];
-                new_end = 0;
-            }
-            new_begin = std::min(new_begin, std::min(it->a_begin(), it->b_begin()));
-            new_end = std::max(new_end, std::max(it->a_end(), it->b_end()));
-        }
-    }
-
     // trim reads
     for (const auto& it: read_infos_) {
         if (it == nullptr) {

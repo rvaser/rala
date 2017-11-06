@@ -107,12 +107,34 @@ OverlapType Overlap::type() const {
         b_end - b_begin < (b_end - b_begin + overhang) * kMaxOverhangRatio) {
         return OverlapType::kX;
     }
-    if (a_begin <= b_begin && a_length_ - a_end <= b_length_ - b_end) {
+    if (a_begin <= b_begin && (a_length_ - a_end) <= (b_length_ - b_end)) {
         return OverlapType::kB;
     }
-    if (a_begin >= b_begin && a_length_ - a_end >= b_length_ - b_end) {
+    if (a_begin >= b_begin && (a_length_ - a_end) >= (b_length_ - b_end)) {
         return OverlapType::kA;
     }
+
+    uint32_t overlap_length = std::max(a_end_ - a_begin_, b_end_ - b_begin_);
+    uint32_t divergence = abs((a_end_ - a_begin_) - (b_end_ - b_begin_));
+
+    if (divergence < overlap_length * 0.01) {
+        uint32_t extension_threshold = 0.05 * std::max(a_length_, b_length_);
+        if (abs(a_begin - b_begin) < extension_threshold) {
+            if ((a_length_ - a_end) >= (b_length_ - b_end)) {
+                return OverlapType::kA;
+            } else {
+                return OverlapType::kB;
+            }
+        }
+        if (abs((a_length_ - a_end) - (b_length_ - b_end)) < extension_threshold) {
+            if (a_begin >= b_begin) {
+                return OverlapType::kA;
+            } else {
+                return OverlapType::kB;
+            }
+        }
+    }
+
     if (a_begin > b_begin) {
         return OverlapType::kAB;
     }
