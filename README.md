@@ -52,11 +52,12 @@ Usage of rala is as following:
             (required)
             input MHAP/PAF file containing pairwise overlaps
             !note: if using PAF file format, reformat the read set with
-                   misc/fastq_formatter.py before running the overlapper
+                   misc/fasta_formatter.py (or misc/fastq_formatter.py)
+                   before running the overlapper
         -t, --threads <int>
             default: hardware concurrency / 2
             number of threads
-        -h, --help\
+        -h, --help
             prints out the help
 
 ## Contact information
