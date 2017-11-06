@@ -1,3 +1,6 @@
+# calculates the NG50 value of the assembly
+# usage: python ng50.py <input FASTA file> <genome length>
+
 import sys
 
 glen = int(sys.argv[2])

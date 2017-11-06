@@ -1,4 +1,7 @@
 # Rala
+
+[![Build status for c++/clang++](https://travis-ci.org/rvaser/rala.svg?branch=master)](https://travis-ci.org/rvaser/rala)
+
 Layout module for raw de novo DNA assembly of long uncorrected reads.
 
 ## Description
@@ -14,29 +17,47 @@ Rala takes as input two files: raw reads in FASTQ format and overlaps between th
 
 
 ## Dependencies
-1. gcc 4.8+
+1. gcc 4.8+ or clang 3.4+
+2. cmake 3.2+
 
 ## Installation
 To install Rala run to following commands:
 
+```bash
     git clone --recursive https://github.com/rvaser/rala.git rala
-    cd rala/
+    cd rala
+    mkdir build
+    cd build
+    cmake -DCMAKE_BUILD_TYPE=Release ..
     make
+```
 
-After running make, an executable named rala will appear in the current directory.
+After succesfull installation, an executable named `rala` will appear in `build/bin`.
 
-**Troubleshooting**
+Optionally, you can run `sudo make install` to install rala executable to your machine.
 
-If you accidentally left out '--recursive' from git clone, run the following commands before running 'make':
-
-    git submodule init
-    git submodule update
+***Note***: if you omitted `--recursive` from `git clone`, run `git submodule init` and `git submodule update` before proceeding with compilation.
 
 ## Usage
 
-Run Rala with the following command:
+Usage of rala is as following:
 
-    ./rala 0 <reads file> <overlaps file> <0 if MHAP, 1 if PAF>
+    rala -i <reads file> -j <overlaps file> [arguments ...]
+
+    arguments:
+        -i, --reads <file>
+            (required)
+            input FASTA/FASTQ file containing reads
+        -j, --overlaps <file>
+            (required)
+            input MHAP/PAF file containing pairwise overlaps
+            !note: if using PAF file format, reformat the read set with
+                   misc/fastq_formatter.py before running the overlapper
+        -t, --threads <int>
+            default: hardware concurrency / 2
+            number of threads
+        -h, --help\
+            prints out the help
 
 ## Contact information
 

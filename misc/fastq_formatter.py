@@ -1,4 +1,6 @@
 # changes read names to integers representing their id (starting from one) and outputs the result to stdout
+# usage: python fastq_formatter.py <input FASTQ file>
+
 import sys
 
 id = 1
