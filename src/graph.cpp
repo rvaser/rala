@@ -6,10 +6,8 @@
 
 #include <set>
 #include <list>
-#include <stack>
 #include <deque>
 #include <algorithm>
-
 #include <iostream>
 #include <fstream>
 
@@ -328,8 +326,6 @@ void Graph::initialize() {
 
     std::vector<std::future<void>> thread_futures;
 
-    std::vector<std::shared_ptr<Overlap>> self_overlaps;
-
     oreader_->rewind();
     while (true) {
         std::vector<std::shared_ptr<Overlap>> overlaps;
@@ -350,11 +346,7 @@ void Graph::initialize() {
 
             read_lengths[it->a_id()] = it->a_length();
 
-            // self overlap check TODO: remove chimeric reads!
             if (it->a_id() == it->b_id()) {
-                if (it->orientation() == 0) {
-                    self_overlaps.emplace_back(it);
-                }
                 overlap_infos_[it->id()] = false;
                 ++num_self_overlaps;
                 continue;
@@ -522,6 +514,19 @@ void Graph::preprocess() {
                 read_infos_[it->a_id()]->end(),
                 read_infos_[it->b_id()]->begin(),
                 read_infos_[it->b_id()]->end())) {
+                it.reset();
+                continue;
+            }
+
+            auto absolute_difference = [](uint32_t a, uint32_t b) -> uint32_t {
+                return a > b ? (a - b) : (b - a);
+            };
+
+            uint32_t correction_length = std::min(it->a_end() - it->a_begin(),
+                it->b_end() - it->b_begin());
+
+            if (absolute_difference(it->a_end() - it->a_begin(), it->b_end() -
+                it->b_begin()) > correction_length * 0.01) {
                 it.reset();
                 continue;
             }

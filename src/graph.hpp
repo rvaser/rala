@@ -6,8 +6,10 @@
 
 #pragma once
 
+#include <stdlib.h>
 #include <stdint.h>
 #include <memory>
+#include <string>
 #include <vector>
 #include <unordered_set>
 

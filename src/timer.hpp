@@ -7,7 +7,6 @@
 #pragma once
 
 #include <stdint.h>
-#include <future>
 #include <sys/time.h>
 
 namespace rala {

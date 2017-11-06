@@ -114,19 +114,23 @@ OverlapType Overlap::type() const {
         return OverlapType::kA;
     }
 
-    uint32_t overlap_length = std::max(a_end_ - a_begin_, b_end_ - b_begin_);
-    uint32_t divergence = abs((a_end_ - a_begin_) - (b_end_ - b_begin_));
+    auto absolute_difference = [](uint32_t a, uint32_t b) -> uint32_t {
+        return a > b ? (a - b) : (b - a);
+    };
 
-    if (divergence < overlap_length * 0.01) {
-        uint32_t extension_threshold = 0.05 * std::max(a_length_, b_length_);
-        if (abs(a_begin - b_begin) < extension_threshold) {
+    uint32_t overlap_length = std::max(a_end_ - a_begin_, b_end_ - b_begin_);
+
+    if (absolute_difference(a_end_ - a_begin_, b_end_ - b_begin_) < overlap_length * 0.01) {
+        uint32_t min_extension = 0.05 * std::max(a_length_, b_length_);
+
+        if (absolute_difference(a_begin, b_begin) < min_extension) {
             if ((a_length_ - a_end) >= (b_length_ - b_end)) {
                 return OverlapType::kA;
             } else {
                 return OverlapType::kB;
             }
         }
-        if (abs((a_length_ - a_end) - (b_length_ - b_end)) < extension_threshold) {
+        if (absolute_difference((a_length_ - a_end), (b_length_ - b_end)) < min_extension) {
             if (a_begin >= b_begin) {
                 return OverlapType::kA;
             } else {

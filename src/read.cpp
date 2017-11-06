@@ -412,11 +412,6 @@ void ReadInfo::correct_coverage_graph(
 
         uint32_t correction_length = std::min(end - begin, other_end -
             other_begin);
-        uint32_t divergence = abs(end - begin - other_end + other_begin);
-
-        if (divergence > correction_length * 0.01) {
-            continue;
-        }
 
         for (uint32_t j = 0; j < correction_length; ++j) {
             if (orientation == 0) {
