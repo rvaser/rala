@@ -23,12 +23,6 @@ namespace rala {
 
 constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
 
-// assembly graph
-constexpr double kTransitiveEdgeEps = 0.12;
-constexpr uint32_t kMaxBubbleLength = 5000000;
-constexpr uint32_t kMinUnitigSize = 6;
-constexpr double kMaxOverlapRatio = 0.9;
-
 bool comparable(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
         (b >= a * (1 - eps) && b <= a * (1 + eps));
@@ -101,8 +95,7 @@ public:
     }
 
     bool is_tip() const {
-        return (out_degree() > 0 && in_degree() == 0 &&
-            unitig_size < kMinUnitigSize);
+        return (out_degree() > 0 && in_degree() == 0 && unitig_size < 6);
     }
 
     uint32_t id;
@@ -422,10 +415,11 @@ void Graph::initialize() {
         }
     }
 
+    // log
     fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
     fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
     fprintf(stderr, "  number of prefiltered reads = %u\n", num_prefiltered_reads);
-    timer.stop(); timer.print("  - time =");
+    timer.stop(); timer.print("  elapsed time =");
     fprintf(stderr, "}\n");
 }
 
@@ -463,7 +457,6 @@ void Graph::preprocess() {
     coverage_median_ = medians.size() % 2 == 1 ?
         medians[medians.size() / 2] :
         (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
-    fprintf(stderr, "  - dataset coverage median = %u\n", coverage_median_);
 
     // filter low quality reads
     uint32_t num_low_quality_reads = 0;
@@ -476,7 +469,6 @@ void Graph::preprocess() {
             ++num_low_quality_reads;
         }
     }
-    fprintf(stderr, "  number of low quality reads = %u\n", num_low_quality_reads);
 
     // find chimeric reads
     for (const auto& it: read_infos_) {
@@ -596,8 +588,6 @@ void Graph::preprocess() {
             coverage_median_ = medians.size() % 2 == 1 ?
                 medians[medians.size() / 2] :
                 (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
-            fprintf(stderr, "  - updated dataset coverage median = %u\n",
-                coverage_median_);
 
             break;
         }
@@ -619,7 +609,10 @@ void Graph::preprocess() {
     }
     thread_futures.clear();
 
-    timer.stop(); timer.print("  - time =");
+    // log
+    fprintf(stderr, "  dataset coverage median = %u\n", coverage_median_);
+    fprintf(stderr, "  number of low quality reads = %u\n", num_low_quality_reads);
+    timer.stop(); timer.print("  elapse time =");
     fprintf(stderr, "}\n");
 }
 
@@ -804,7 +797,7 @@ void Graph::construct(bool preprocess) {
     // log
     fprintf(stderr, "  number of graph nodes = %zu\n", nodes_.size());
     fprintf(stderr, "  number of graph edges = %zu\n", edges_.size());
-    timer.stop(); timer.print("  - time =");
+    timer.stop(); timer.print("  elapsed time =");
     fprintf(stderr, "}\n");
 }
 
@@ -854,7 +847,7 @@ void Graph::simplify() {
     fprintf(stderr, "  number of bubbles = %u\n", num_bubbles);
     fprintf(stderr, "  number of long edges = %u\n", num_long_edges);
 
-    timer.stop(); timer.print("  - time =");
+    timer.stop(); timer.print("  elapsed time =");
     fprintf(stderr, "}\n");
 }
 
@@ -866,8 +859,8 @@ uint32_t Graph::remove_isolated_nodes() {
         if (it == nullptr) {
             continue;
         }
-        if ((it->in_degree() == 0 && it->out_degree() == 0 &&
-            it->unitig_size < kMinUnitigSize) || it->mark == true) {
+        if ((it->in_degree() == 0 && it->out_degree() == 0 && it->unitig_size < 6) ||
+            it->mark == true) {
             it.reset();
             ++num_isolated_nodes;
         }
@@ -900,7 +893,7 @@ uint32_t Graph::remove_transitive_edges() {
                     candidate_edge[z]->mark == false) {
 
                     if (comparable(edge_xy->length + edge_yz->length,
-                        candidate_edge[z]->length, kTransitiveEdgeEps)) {
+                        candidate_edge[z]->length, 0.12)) {
 
                         candidate_edge[z]->mark = true;
                         candidate_edge[z]->pair->mark = true;
@@ -939,7 +932,7 @@ uint32_t Graph::remove_long_edges() {
                     continue;
                 }
                 if (node->length() - other_edge->length <
-                    (node->length() - edge->length) * kMaxOverlapRatio) {
+                    (node->length() - edge->length) * 0.9) {
 
                     other_edge->mark = true;
                     other_edge->pair->mark = true;
@@ -1086,7 +1079,7 @@ uint32_t Graph::remove_bubbles() {
                     continue;
                 }
 
-                if (distance[v] + edge->length > kMaxBubbleLength) {
+                if (distance[v] + edge->length > 5000000) {
                     // Out of reach
                     continue;
                 }
@@ -1240,11 +1233,11 @@ void Graph::print_contigs() const {
 
     uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->id % 2 == 0 ||
-            node->unitig_size < kMinUnitigSize || node->length() < 10000) {
+        if (node == nullptr || node->id % 2 == 0 || node->unitig_size < 6 ||
+            node->length() < 10000) {
             continue;
         }
-        fprintf(stderr, "  - contig %d, num reads = %u, length = %zu (%d -> %d)\n",
+        fprintf(stderr, "  contig %d: length = %zu, num reads = %u (%u -> %u)\n",
             contig_id, node->unitig_size, node->sequence.size(),
             node->read_ids.front(), node->read_ids.back());
         fprintf(stdout, ">Contig_%u_(Utg=%u:Len=%lu)\n%s\n", contig_id++,

@@ -10,8 +10,6 @@
 
 namespace rala {
 
-constexpr double kMaxOverhangRatio = 0.875;
-
 Overlap::Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error,
     uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
     uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end,
@@ -103,8 +101,8 @@ OverlapType Overlap::type() const {
     uint32_t overhang = std::min(a_begin, b_begin) + std::min(a_length_ -
         a_end, b_length_ - b_end);
 
-    if (a_end - a_begin < (a_end - a_begin + overhang) * kMaxOverhangRatio ||
-        b_end - b_begin < (b_end - b_begin + overhang) * kMaxOverhangRatio) {
+    if (a_end - a_begin < (a_end - a_begin + overhang) * 0.875 ||
+        b_end - b_begin < (b_end - b_begin + overhang) * 0.875) {
         return OverlapType::kX;
     }
     if (a_begin <= b_begin && (a_length_ - a_end) <= (b_length_ - b_end)) {
