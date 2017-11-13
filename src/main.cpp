@@ -55,6 +55,7 @@ int main(int argc, char** argv) {
 void help() {
     printf(
         "usage: rala [options ...] <reads> <overlaps>\n"
+        "\n"
         "    <reads>\n"
         "        input file in FASTA/FASTQ format containing reads\n"
         "    <overlaps>\n"

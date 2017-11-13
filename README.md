@@ -43,6 +43,7 @@ Optionally, you can run `sudo make install` to install rala executable to your m
 Usage of rala is as following:
 
     rala [options ...] <reads> <overlaps>
+
         <reads>
             input file in FASTA/FASTQ format containing reads
         <overlaps>
