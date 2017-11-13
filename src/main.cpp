@@ -6,8 +6,6 @@
 #include "thread_pool/thread_pool.hpp"
 
 static struct option options[] = {
-    {"reads", required_argument, 0, 'i'},
-    {"overlaps", required_argument, 0, 'j'},
     {"threads", required_argument, 0, 't'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
@@ -17,24 +15,11 @@ void help();
 
 int main(int argc, char** argv) {
 
-    std::string reads_path;
-    std::string overlaps_path;
-    std::string output_path;
     uint32_t num_threads = std::thread::hardware_concurrency() / 2;
 
-    while (true) {
-        auto argument = getopt_long(argc, argv, "i:j:t:h", options, nullptr);
-        if (argument == -1) {
-            break;
-        }
-
+    char argument;
+    while ((argument = getopt_long(argc, argv, "t:h", options, nullptr)) != -1) {
         switch (argument) {
-            case 'i':
-                reads_path = optarg;
-                break;
-            case 'j':
-                overlaps_path = optarg;
-                break;
             case 't':
                 num_threads = atoi(optarg);
                 break;
@@ -45,18 +30,19 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (reads_path.empty()) {
-        fprintf(stderr, "rala:: error: missing option -i (reads file)!\n");
-        help();
-        return -1;
+    std::vector<std::string> input_paths;
+
+    for (int32_t i = optind; i < argc; ++i) {
+        input_paths.emplace_back(argv[i]);
     }
-    if (overlaps_path.empty()) {
-        fprintf(stderr, "rala:: error: missing option -j (overlaps file)!\n");
+
+    if (input_paths.size() < 2) {
+        fprintf(stderr, "rala:: error: missing input file(s)!\n");
         help();
         return -1;
     }
 
-    auto graph = rala::createGraph(reads_path, overlaps_path, num_threads);
+    auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
     graph->construct();
     graph->simplify();
     // graph->print_csv("assembly_graph.csv");
@@ -68,21 +54,19 @@ int main(int argc, char** argv) {
 
 void help() {
     printf(
-        "usage: rala -i <reads file> -j <overlaps file> [arguments ...]\n"
+        "usage: rala [options ...] <reads> <overlaps>\n"
+        "    <reads>\n"
+        "        input file in FASTA/FASTQ format containing reads\n"
+        "    <overlaps>\n"
+        "        input file in MHAP/PAF format containing pairwise overlaps\n"
+        "        !note: if you are using an overlapper with the PAF file format,\n"
+        "            reformat the read set with misc/fasta_formatter.py (or\n"
+        "            misc/fastq_formatter.py) before running the overlapper\n"
         "\n"
-        "arguments:\n"
-        "    -i, --reads <file>\n"
-        "        (required)\n"
-        "        input FASTA/FASTQ file containing reads\n"
-        "    -j, --overlaps <file>\n"
-        "        (required)\n"
-        "        input MHAP/PAF file containing pairwise overlaps\n"
-        "        !note: if using PAF file format, reformat the read set with\n"
-        "               misc/fasta_formatter.py (or misc/fastq_formatter.py)\n"
-        "               before running the overlapper\n"
-        "    -t, --threads <int>\n"
-        "        default: hardware concurrency / 2\n"
-        "        number of threads\n"
-        "    -h, --help\n"
-        "        prints out the help\n");
+        "    options:\n"
+        "        -t, --threads <int>\n"
+        "            default: hardware concurrency / 2\n"
+        "            number of threads\n"
+        "        -h, --help\n"
+        "            prints out the help\n");
 }
