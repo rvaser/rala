@@ -42,23 +42,21 @@ Optionally, you can run `sudo make install` to install rala executable to your m
 
 Usage of rala is as following:
 
-    rala -i <reads file> -j <overlaps file> [arguments ...]
+    rala [options ...] <reads> <overlaps>
+        <reads>
+            input file in FASTA/FASTQ format containing reads
+        <overlaps>
+            input file in MHAP/PAF format containing pairwise overlaps
+            !note: if you are using an overlapper with the PAF file format,
+                reformat the read set with misc/fasta_formatter.py (or
+                misc/fastq_formatter.py) before running the overlapper
 
-    arguments:
-        -i, --reads <file>
-            (required)
-            input FASTA/FASTQ file containing reads
-        -j, --overlaps <file>
-            (required)
-            input MHAP/PAF file containing pairwise overlaps
-            !note: if using PAF file format, reformat the read set with
-                   misc/fasta_formatter.py (or misc/fastq_formatter.py)
-                   before running the overlapper
-        -t, --threads <int>
-            default: hardware concurrency / 2
-            number of threads
-        -h, --help
-            prints out the help
+        options:
+            -t, --threads <int>
+                default: hardware concurrency / 2
+                number of threads
+            -h, --help
+                prints out the help
 
 ## Contact information
 
