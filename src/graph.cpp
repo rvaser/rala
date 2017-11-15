@@ -1227,9 +1227,9 @@ uint32_t Graph::create_unitigs() {
     return num_unitigs_created;
 }
 
-void Graph::print_contigs() const {
+void Graph::get_contigs(std::vector<std::unique_ptr<Read>>& dst) const {
 
-    fprintf(stderr, "Graph::print_contigs {\n");
+    fprintf(stderr, "Graph::get_contigs {\n");
 
     uint32_t contig_id = 0;
     for (const auto& node: nodes_) {
@@ -1237,11 +1237,17 @@ void Graph::print_contigs() const {
             node->length() < 10000) {
             continue;
         }
-        fprintf(stderr, "  contig %d: length = %zu, num reads = %u (%u -> %u)\n",
-            contig_id, node->unitig_size, node->sequence.size(),
+        fprintf(stderr, "  contig %d: length = %lu, num reads = %u (%u -> %u)\n",
+            contig_id, node->sequence.size(), node->unitig_size,
             node->read_ids.front(), node->read_ids.back());
-        fprintf(stdout, ">Contig_%u_(Utg=%u:Len=%lu)\n%s\n", contig_id++,
-            node->unitig_size, node->sequence.size(), node->sequence.c_str());
+
+        std::string name = ">Contig_" + std::to_string(contig_id) + "_(Utg=" +
+            std::to_string(node->unitig_size) + ":Len=" +
+            std::to_string(node->sequence.size()) + ")";
+
+        dst.emplace_back(createRead(contig_id, name.c_str(), name.size(),
+            node->sequence.c_str(), node->sequence.size()));
+        ++contig_id;
     }
 
     fprintf(stderr, "}\n");
@@ -1346,7 +1352,7 @@ void Graph::print_csv(std::string path) const {
         if (it == nullptr || it->id % 2 == 0) {
             continue;
         }
-        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%d U:%d,0,-\n",
+        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%u U:%u,0,-\n",
             it->id, it->length(), it->read_id, it->unitig_size, it->pair->id,
             it->pair->length(), it->pair->read_id, it->pair->unitig_size);
     }
@@ -1355,7 +1361,7 @@ void Graph::print_csv(std::string path) const {
         if (it == nullptr) {
             continue;
         }
-        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%d U:%d,1,%d %d\n",
+        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%u U:%u,1,%u %u\n",
             it->begin_node->id, it->begin_node->length(),
             it->begin_node->read_id, it->begin_node->unitig_size,
             it->end_node->id, it->end_node->length(), it->end_node->read_id,

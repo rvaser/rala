@@ -21,6 +21,10 @@ namespace bioparser {
 
 namespace rala {
 
+class Read;
+std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
+    const char* sequence, uint32_t sequence_length);
+
 class Read {
 public:
     ~Read() {};
@@ -45,6 +49,9 @@ public:
     }
 
     void update(uint32_t begin, uint32_t end);
+
+    friend std::unique_ptr<Read> createRead(uint64_t id, const char* name,
+        uint32_t name_length, const char* sequence, uint32_t sequence_length);
 
     friend bioparser::FastaReader<Read>;
     friend bioparser::FastqReader<Read>;

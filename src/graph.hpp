@@ -80,16 +80,20 @@ public:
     uint32_t create_unitigs();
 
     /*!
-     * @brief Outputs unitigs in FASTA format
+     * @brief Stores all contigs into dst
      */
-    void print_contigs() const;
-
-    void print_knots() const;
+    void get_contigs(std::vector<std::unique_ptr<Read>>& dst) const;
 
     /*!
      * @brief Prints assembly graph in csv format
      */
     void print_csv(std::string path) const;
+
+    /*!
+     * @brief Prints all unresolved graph junctions into graphs/ folder if
+     * such exists
+     */
+    void print_knots() const;
 
     /*!
      * @brief For testing purposes

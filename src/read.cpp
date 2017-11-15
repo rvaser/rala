@@ -99,6 +99,22 @@ void coverageSubgraphUpdate(CoverageSubgraph& subgraph, int32_t position) {
     }
 }
 
+std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
+    const char* sequence, uint32_t sequence_length) {
+
+    if (name == nullptr || name_length == 0) {
+        fprintf(stderr, "rala::createRead error: empty name!\n");
+        exit(1);
+    }
+    if (sequence == nullptr || sequence_length == 0) {
+        fprintf(stderr, "rala::createRead error: empty sequence!\n");
+        exit(1);
+    }
+
+    return std::unique_ptr<Read>(new Read(id, name, name_length, sequence,
+        sequence_length));
+}
+
 Read::Read(uint64_t id, const char* name, uint32_t name_length,
     const char* sequence, uint32_t sequence_length)
         : id_(id), name_(name, name_length), sequence_(sequence,

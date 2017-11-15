@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <getopt.h>
 
+#include "read.hpp"
 #include "graph.hpp"
 #include "thread_pool/thread_pool.hpp"
 
@@ -45,9 +46,13 @@ int main(int argc, char** argv) {
     auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
     graph->construct();
     graph->simplify();
-    // graph->print_csv("assembly_graph.csv");
-    graph->print_knots();
-    graph->print_contigs();
+
+    std::vector<std::unique_ptr<rala::Read>> contigs;
+    graph->get_contigs(contigs);
+
+    for (const auto& it: contigs) {
+        fprintf(stdout, "%s\n%s\n", it->name().c_str(), it->sequence().c_str());
+    }
 
     return 0;
 }
