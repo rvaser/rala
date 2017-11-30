@@ -18,9 +18,9 @@ int main(int argc, char** argv) {
 
     uint32_t num_threads = std::thread::hardware_concurrency() / 2;
 
-    char argument;
-    while ((argument = getopt_long(argc, argv, "t:h", options, nullptr)) != -1) {
-        switch (argument) {
+    char opt;
+    while ((opt = getopt_long(argc, argv, "t:h", options, nullptr)) != -1) {
+        switch (opt) {
             case 't':
                 num_threads = atoi(optarg);
                 break;
