@@ -234,7 +234,8 @@ Graph::Graph(const std::string& reads_path, const std::string& overlaps_path,
 
     thread_pool_ = thread_pool::createThreadPool(num_threads);
 
-    auto extension = reads_path.substr(reads_path.rfind('.'));
+    auto extension = reads_path.substr(std::min(reads_path.rfind('.'),
+        reads_path.size()));
     if (extension == ".fasta" || extension == ".fa") {
         rreader_ = bioparser::createReader<Read, bioparser::FastaReader>(
             reads_path);
@@ -249,7 +250,8 @@ Graph::Graph(const std::string& reads_path, const std::string& overlaps_path,
         exit(1);
     }
 
-    extension = overlaps_path.substr(overlaps_path.rfind('.'));
+    extension = overlaps_path.substr(std::min(overlaps_path.rfind('.'),
+        overlaps_path.size()));
     if (extension == ".paf") {
         oreader_ = bioparser::createReader<Overlap, bioparser::PafReader>(
             overlaps_path);
@@ -1376,7 +1378,8 @@ void Graph::print_knots() const {
     std::vector<bool> visited(edges_.size(), false);
 
     for (const auto& node: nodes_) {
-        if (node == nullptr || (node->suffix_edges.size() < 2 && node->prefix_edges.size() < 2)) {
+        if (node == nullptr ||
+            (node->suffix_edges.size() < 2 && node->prefix_edges.size() < 2)) {
             continue;
         }
         uint32_t read_id = node->read_ids.front();
