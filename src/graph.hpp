@@ -90,6 +90,11 @@ public:
     void print_csv(std::string path) const;
 
     /*!
+     * @brief Prints assembly graph in GFA format
+     */
+    void print_gfa(std::string path) const;
+
+    /*!
      * @brief Prints all unresolved graph junctions into graphs/ folder if
      * such exists
      */

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <unordered_map>
 
 #include "read.hpp"
 #include "overlap.hpp"
@@ -56,9 +57,9 @@ void shrinkVector(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
 class Graph::Node {
 public:
     // Encapsulating read
-    Node(uint32_t _id, uint32_t _read_id, const std::string& read_name,
+    Node(uint32_t _id, uint32_t _read_id, const std::string& _read_name,
         const std::string& _sequence)
-            : id(_id), read_id(_read_id), pair(), sequence(_sequence),
+            : id(_id), read_id(_read_id), read_name(_read_name), pair(), sequence(_sequence),
             prefix_edges(), suffix_edges(), read_ids(1, _read_id),
             unitig_size(1), mark(false), rc(id % 2) {
 
@@ -100,6 +101,7 @@ public:
 
     uint32_t id;
     uint32_t read_id;
+    std::string read_name;
     Node* pair;
     std::string sequence;
     std::list<Edge*> prefix_edges;
@@ -136,7 +138,7 @@ public:
 
 Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node,
     std::unordered_set<uint32_t>& marked_edges) :
-        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
+        id(_id), read_id(), read_name(), pair(), sequence(), prefix_edges(), suffix_edges(),
         read_ids(), unitig_size(), mark(false) {
 
     if (!begin_node->prefix_edges.empty()) {
@@ -188,7 +190,7 @@ Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node,
 
 Graph::Node::Node(uint32_t _id, Node* begin_node,
     std::unordered_set<uint32_t>& marked_edges) :
-        id(_id), read_id(), pair(), sequence(), prefix_edges(), suffix_edges(),
+        id(_id), read_id(), read_name(), pair(), sequence(), prefix_edges(), suffix_edges(),
         read_ids(), unitig_size(), mark(false) {
 
     uint32_t length = 0;
@@ -1368,6 +1370,43 @@ void Graph::print_csv(std::string path) const {
             it->begin_node->read_id, it->begin_node->unitig_size,
             it->end_node->id, it->end_node->length(), it->end_node->read_id,
             it->end_node->unitig_size, it->id, it->length);
+    }
+
+    fclose(graph_file);
+}
+
+void Graph::print_gfa(std::string path) const {
+
+    auto graph_file = fopen(path.c_str(), "w");
+
+    std::unordered_map<uint32_t, std::string> node_id_to_unitig_name;
+    uint32_t unitig_id = 0;
+
+    for (const auto& it: nodes_) {
+        if (it == nullptr || it->id % 2 == 0) {
+            continue;
+        }
+        if (it->read_name.empty()) {
+            auto unitig_name = "Utg" + std::to_string(unitig_id++);
+            node_id_to_unitig_name[it->id] = unitig_name;
+            node_id_to_unitig_name[it->pair->id] = unitig_name;
+        }
+        fprintf(graph_file, "S\t%s\t*\tLN:i:%u\tRC:i:%u\n",
+            it->read_name.empty() ? node_id_to_unitig_name[it->id].c_str() : it->read_name.c_str(),
+            it->sequence.size(), it->unitig_size);
+    }
+
+    for (const auto& it: edges_) {
+        if (it == nullptr) {
+            continue;
+        }
+        fprintf(graph_file, "L\t%s\t%c\t%s\t%c\t*\n",
+            nodes_[it->begin_node->id]->read_name.empty() ?
+            node_id_to_unitig_name[it->begin_node->id].c_str() : nodes_[it->begin_node->id]->read_name.c_str(),
+            it->begin_node->id % 2 == 0 ? '+' : '-',
+            nodes_[it->end_node->id]->read_name.empty() ?
+            node_id_to_unitig_name[it->end_node->id].c_str() : nodes_[it->end_node->id]->read_name.c_str(),
+            it->end_node->id % 2 == 0 ? '+' : '-');
     }
 
     fclose(graph_file);
