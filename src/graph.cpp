@@ -1383,7 +1383,7 @@ void Graph::print_gfa(std::string path) const {
     uint32_t unitig_id = 0;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->id % 2 == 0) {
+        if (it == nullptr || it->id % 2 == 1) {
             continue;
         }
         if (it->read_name.empty()) {
@@ -1391,22 +1391,23 @@ void Graph::print_gfa(std::string path) const {
             node_id_to_unitig_name[it->id] = unitig_name;
             node_id_to_unitig_name[it->pair->id] = unitig_name;
         }
-        fprintf(graph_file, "S\t%s\t*\tLN:i:%u\tRC:i:%u\n",
+        fprintf(graph_file, "S\t%s\t%s\tLN:i:%zu\tRC:i:%u\n",
             it->read_name.empty() ? node_id_to_unitig_name[it->id].c_str() : it->read_name.c_str(),
-            it->sequence.size(), it->unitig_size);
+            it->sequence.c_str(), it->sequence.size(), it->unitig_size);
     }
 
     for (const auto& it: edges_) {
         if (it == nullptr) {
             continue;
         }
-        fprintf(graph_file, "L\t%s\t%c\t%s\t%c\t*\n",
+        fprintf(graph_file, "L\t%s\t%c\t%s\t%c\t%zuM\n",
             nodes_[it->begin_node->id]->read_name.empty() ?
             node_id_to_unitig_name[it->begin_node->id].c_str() : nodes_[it->begin_node->id]->read_name.c_str(),
             it->begin_node->id % 2 == 0 ? '+' : '-',
             nodes_[it->end_node->id]->read_name.empty() ?
             node_id_to_unitig_name[it->end_node->id].c_str() : nodes_[it->end_node->id]->read_name.c_str(),
-            it->end_node->id % 2 == 0 ? '+' : '-');
+            it->end_node->id % 2 == 0 ? '+' : '-',
+            it->begin_node->sequence.size() - it->length);
     }
 
     fclose(graph_file);
