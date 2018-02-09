@@ -24,12 +24,12 @@ Rala takes as input two files: raw reads in FASTQ format and overlaps between th
 To install Rala run to following commands:
 
 ```bash
-    git clone --recursive https://github.com/rvaser/rala.git rala
-    cd rala
-    mkdir build
-    cd build
-    cmake -DCMAKE_BUILD_TYPE=Release ..
-    make
+git clone --recursive https://github.com/rvaser/rala.git rala
+cd rala
+mkdir build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make
 ```
 
 After succesfull installation, an executable named `rala` will appear in `build/bin`.
