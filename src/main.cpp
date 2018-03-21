@@ -2,12 +2,15 @@
 #include <stdlib.h>
 #include <getopt.h>
 
-#include "read.hpp"
+#include "sequence.hpp"
 #include "graph.hpp"
 #include "thread_pool/thread_pool.hpp"
 
+static const char* version = "v0.7.0";
+
 static struct option options[] = {
     {"threads", required_argument, 0, 't'},
+    {"version", no_argument, 0, 'v'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
 };
@@ -16,7 +19,7 @@ void help();
 
 int main(int argc, char** argv) {
 
-    uint32_t num_threads = std::thread::hardware_concurrency() / 2;
+    uint32_t num_threads = 1;
 
     char opt;
     while ((opt = getopt_long(argc, argv, "t:h", options, nullptr)) != -1) {
@@ -24,10 +27,14 @@ int main(int argc, char** argv) {
             case 't':
                 num_threads = atoi(optarg);
                 break;
+            case 'v':
+                printf("%s\n", version);
+                exit(0);
             case 'h':
-            default:
                 help();
-                return -1;
+                exit(0);
+            default:
+                exit(1);
         }
     }
 
@@ -38,20 +45,23 @@ int main(int argc, char** argv) {
     }
 
     if (input_paths.size() < 2) {
-        fprintf(stderr, "rala:: error: missing input file(s)!\n");
+        fprintf(stderr, "[rala::] error: missing input file(s)!\n");
         help();
-        return -1;
+        exit(1);
     }
 
     auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
     graph->construct();
     graph->simplify();
 
-    std::vector<std::unique_ptr<rala::Read>> contigs;
-    graph->get_contigs(contigs);
+    std::vector<std::unique_ptr<rala::Sequence>> contigs;
+    graph->extract_contigs(contigs);
+
+    graph->print_csv("assembly_graph.csv");
+    graph->print_gfa("assembly_graph.gfa");
 
     for (const auto& it: contigs) {
-        fprintf(stdout, "%s\n%s\n", it->name().c_str(), it->sequence().c_str());
+        fprintf(stdout, "%s\n%s\n", it->name().c_str(), it->data().c_str());
     }
 
     return 0;
@@ -59,20 +69,21 @@ int main(int argc, char** argv) {
 
 void help() {
     printf(
-        "usage: rala [options ...] <reads> <overlaps>\n"
+        "usage: rala [options ...] <sequences> <overlaps>\n"
         "\n"
-        "    <reads>\n"
-        "        input file in FASTA/FASTQ format containing reads\n"
+        "    <sequences>\n"
+        "        input file in FASTA/FASTQ format (can be compressed with gzip)\n"
+        "        containing sequences\n"
         "    <overlaps>\n"
-        "        input file in MHAP/PAF format containing pairwise overlaps\n"
-        "        !note: if you are using an overlapper with the PAF file format,\n"
-        "            reformat the read set with misc/fasta_formatter.py (or\n"
-        "            misc/fastq_formatter.py) before running the overlapper\n"
+        "        input file in MHAP/PAF format (can be compressed with gzip)\n"
+        "        containing pairwise overlaps\n"
         "\n"
         "    options:\n"
         "        -t, --threads <int>\n"
-        "            default: hardware concurrency / 2\n"
+        "            default: 1\n"
         "            number of threads\n"
+        "        --version\n"
+        "            prints the version number\n"
         "        -h, --help\n"
-        "            prints out the help\n");
+        "            prints the usage\n");
 }

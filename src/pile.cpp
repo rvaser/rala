@@ -1,65 +1,81 @@
 /*!
- * @file read.cpp
+ * @file pile.cpp
  *
- * @brief Read class source file
+ * @brief Pile class source file
  */
 
-#include <assert.h>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
 #include <deque>
 
-#include "read.hpp"
+#include "overlap.hpp"
+#include "pile.hpp"
 
 namespace rala {
 
-enum class CoverageHillType {
+using Subpile = std::deque<std::pair<int32_t, int32_t>>;
+
+void subpileAdd(Subpile& src, int32_t value, int32_t position) {
+    while (!src.empty() && src.back().second <= value) {
+        src.pop_back();
+    }
+    src.emplace_back(position, value);
+}
+
+void subpileUpdate(Subpile& src, int32_t position) {
+    while (!src.empty() && src.front().first <= position) {
+        src.pop_front();
+    }
+}
+
+using Hill = std::pair<uint32_t, uint32_t>;
+
+enum class HillType {
     kInvalid,
     kNormal,
     kRepeat,
     kChimeric
 };
 
-CoverageHillType checkCoverageHill(const std::pair<uint32_t, uint32_t>& hill_begin,
+HillType hillType(const std::pair<uint32_t, uint32_t>& hill_begin,
     const std::pair<uint32_t, uint32_t>& hill_end, uint32_t dataset_median,
-    const std::vector<uint16_t>& coverage_graph, uint32_t begin, uint32_t end) {
+    const std::vector<uint16_t>& pile, uint32_t begin, uint32_t end) {
 
     if (hill_end.second - (hill_begin.first >> 1) > 0.84 * (end - begin)) {
-        return CoverageHillType::kInvalid;
+        return HillType::kInvalid;
     }
 
     bool found_peak = false;
-    uint32_t peak_value = 1.3 * std::max(coverage_graph[hill_begin.second],
-        coverage_graph[hill_end.first >> 1]);
+    uint32_t peak_value = 1.3 * std::max(pile[hill_begin.second], pile[hill_end.first >> 1]);
 
     uint32_t valid_points = 0;
     uint32_t min_value = dataset_median * 1.3;
 
     for (uint32_t i = hill_begin.second + 1; i < (hill_end.first >> 1); ++i) {
-        if (coverage_graph[i] > min_value) {
+        if (pile[i] > min_value) {
             ++valid_points;
         }
-        if (coverage_graph[i] > peak_value) {
+        if (pile[i] > peak_value) {
             found_peak = true;
         }
     }
     if (!found_peak) {
-        return CoverageHillType::kInvalid;
+        return HillType::kInvalid;
     }
     if (valid_points < 0.84 * ((hill_end.first >> 1) - hill_begin.second)) {
         if ((hill_end.first >> 1) - hill_begin.second < 596 &&
             (hill_begin.first >> 1) > 0.05 * (end - begin) + begin &&
             (hill_end.second) < 0.95 * (end - begin) + begin) {
 
-            return CoverageHillType::kChimeric;
+            return HillType::kChimeric;
         }
-        return CoverageHillType::kNormal;
+        return HillType::kNormal;
     }
-    return CoverageHillType::kRepeat;
+    return HillType::kRepeat;
 }
 
-void mergeCoverageHills(std::vector<std::pair<uint32_t, uint32_t>>& hills) {
+void hillMerge(std::vector<std::pair<uint32_t, uint32_t>>& hills) {
 
     std::vector<std::pair<uint32_t, uint32_t>> tmp;
     std::vector<bool> is_merged(hills.size(), false);
@@ -80,126 +96,49 @@ void mergeCoverageHills(std::vector<std::pair<uint32_t, uint32_t>>& hills) {
         tmp.emplace_back(hills[i].first, hills[i].second);
     }
     hills.swap(tmp);
-};
-
-using CoverageSubgraph = std::deque<std::pair<int32_t, int32_t>>;
-
-void coverageSubgraphAdd(CoverageSubgraph& subgraph, int32_t value,
-    int32_t position) {
-
-    while (!subgraph.empty() && subgraph.back().second <= value) {
-        subgraph.pop_back();
-    }
-    subgraph.emplace_back(position, value);
 }
 
-void coverageSubgraphUpdate(CoverageSubgraph& subgraph, int32_t position) {
-    while (!subgraph.empty() && subgraph.front().first <= position) {
-        subgraph.pop_front();
-    }
+std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
+    return std::unique_ptr<Pile>(new Pile(id, read_length));
 }
 
-std::unique_ptr<Read> createRead(uint64_t id, const char* name, uint32_t name_length,
-    const char* sequence, uint32_t sequence_length) {
-
-    if (name == nullptr || name_length == 0) {
-        fprintf(stderr, "rala::createRead error: empty name!\n");
-        exit(1);
-    }
-    if (sequence == nullptr || sequence_length == 0) {
-        fprintf(stderr, "rala::createRead error: empty sequence!\n");
-        exit(1);
-    }
-
-    return std::unique_ptr<Read>(new Read(id, name, name_length, sequence,
-        sequence_length));
+Pile::Pile(uint64_t id, uint32_t read_length)
+        : id_(id), begin_(0), end_(read_length), p10_(0), median_(0),
+        data_(end_ - begin_, 0), corrected_data_(), hills_() {
 }
 
-Read::Read(uint64_t id, const char* name, uint32_t name_length,
-    const char* sequence, uint32_t sequence_length)
-        : id_(id), name_(name, name_length), sequence_(sequence,
-        sequence_length), reverse_complement_() {
-}
-
-Read::Read(uint64_t id, const char* name, uint32_t name_length,
-    const char* sequence, uint32_t sequence_length,
-    const char* quality, uint32_t quality_length)
-        : Read(id, name, name_length, sequence, sequence_length) {
-}
-
-void Read::update(uint32_t begin, uint32_t end) {
-    sequence_ = sequence_.substr(begin, end - begin);
-    if (!reverse_complement_.empty()) {
-        create_reverse_complement();
-    }
-}
-
-void Read::create_reverse_complement() {
-    reverse_complement_.clear();
-    for (int32_t i = sequence_.size() - 1; i >= 0; --i) {
-        switch (sequence_[i]) {
-            case 'A':
-                reverse_complement_ += 'T';
-                break;
-            case 'T':
-                reverse_complement_ += 'A';
-                break;
-            case 'C':
-                reverse_complement_ += 'G';
-                break;
-            case 'G':
-                reverse_complement_ += 'C';
-                break;
-            default:
-                break;
-        }
-    }
-
-    assert(reverse_complement_.size() == sequence_.size());
-}
-
-std::unique_ptr<ReadInfo> createReadInfo(uint64_t id, uint32_t read_length) {
-    return std::unique_ptr<ReadInfo>(new ReadInfo(id, read_length));
-}
-
-ReadInfo::ReadInfo(uint64_t id, uint32_t read_length)
-        : id_(id), begin_(0), end_(read_length), coverage_p10_(0), coverage_median_(0),
-        coverage_graph_(end_ - begin_ + 1, 0), corrected_coverage_graph_(),
-        coverage_hills_() {
-}
-
-std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double q) {
+std::vector<std::pair<uint32_t, uint32_t>> Pile::find_slopes(double q) {
 
     std::vector<std::pair<uint32_t, uint32_t>> slope_regions;
 
     int32_t k = 847;
-    int32_t read_length = coverage_graph_.size();
+    int32_t read_length = data_.size();
 
-    CoverageSubgraph left_subgraph;
+    Subpile left_subpile;
     uint32_t first_down = 0, last_down = 0;
     bool found_down = false;
 
-    CoverageSubgraph right_subgraph;
+    Subpile right_subpile;
     uint32_t first_up = 0, last_up = 0;
     bool found_up = false;
 
     // find slope regions
     for (int32_t i = 0; i < k; ++i) {
-        coverageSubgraphAdd(right_subgraph, coverage_graph_[i], i);
+        subpileAdd(right_subpile, data_[i], i);
     }
     for (int32_t i = 0; i < read_length; ++i) {
         if (i > 0) {
-            coverageSubgraphAdd(left_subgraph, coverage_graph_[i - 1], i - 1);
+            subpileAdd(left_subpile, data_[i - 1], i - 1);
         }
-        coverageSubgraphUpdate(left_subgraph, i - 1 - k);
+        subpileUpdate(left_subpile, i - 1 - k);
 
         if (i < read_length - k) {
-            coverageSubgraphAdd(right_subgraph, coverage_graph_[i + k], i + k);
+            subpileAdd(right_subpile, data_[i + k], i + k);
         }
-        coverageSubgraphUpdate(right_subgraph, i);
+        subpileUpdate(right_subpile, i);
 
-        int32_t current_value = coverage_graph_[i] * q;
-        if (i != 0 && left_subgraph.front().second > current_value) {
+        int32_t current_value = data_[i] * q;
+        if (i != 0 && left_subpile.front().second > current_value) {
             if (found_down) {
                 if (i - last_down > 1) {
                     slope_regions.emplace_back(first_down << 1 | 0, last_down);
@@ -211,7 +150,7 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
             }
             last_down = i;
         }
-        if (i != (read_length - 1) && right_subgraph.front().second > current_value) {
+        if (i != (read_length - 1) && right_subpile.front().second > current_value) {
             if (found_up) {
                 if (i - last_up > 1) {
                     slope_regions.emplace_back(first_up << 1 | 1, last_up);
@@ -235,7 +174,7 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
     while (true) {
         std::sort(slope_regions.begin(), slope_regions.end());
 
-        uint32_t is_changed = false;
+        bool is_changed = false;
         for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
             if (slope_regions[i].second <= (slope_regions[i + 1].first >> 1)) {
                 continue;
@@ -243,19 +182,19 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
 
             std::vector<std::pair<uint32_t, uint32_t>> subregions;
             if (slope_regions[i].first & 1) {
-                right_subgraph.clear();
+                right_subpile.clear();
                 found_up = false;
 
-                uint32_t subgraph_begin = slope_regions[i].first >> 1;
-                uint32_t subgraph_end = std::min(slope_regions[i].second,
+                uint32_t subpile_begin = slope_regions[i].first >> 1;
+                uint32_t subpile_end = std::min(slope_regions[i].second,
                     slope_regions[i + 1].second);
 
-                for (uint32_t j = subgraph_begin; j < subgraph_end + 1; ++j) {
-                    coverageSubgraphAdd(right_subgraph, coverage_graph_[j], j);
+                for (uint32_t j = subpile_begin; j < subpile_end + 1; ++j) {
+                    subpileAdd(right_subpile, data_[j], j);
                 }
-                for (uint32_t j = subgraph_begin; j < subgraph_end; ++j) {
-                    coverageSubgraphUpdate(right_subgraph, j);
-                    if (coverage_graph_[j] * q < right_subgraph.front().second) {
+                for (uint32_t j = subpile_begin; j < subpile_end; ++j) {
+                    subpileUpdate(right_subpile, j);
+                    if (data_[j] * q < right_subpile.front().second) {
                         if (found_up) {
                             if (j - last_up > 1) {
                                 subregions.emplace_back(first_up, last_up);
@@ -275,20 +214,18 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
                 for (const auto& it: subregions) {
                     slope_regions.emplace_back(it.first << 1 | 1, it.second);
                 }
-                slope_regions[i].first = subgraph_end << 1 | 1;
+                slope_regions[i].first = subpile_end << 1 | 1;
 
             } else {
-                left_subgraph.clear();
+                left_subpile.clear();
                 found_down = false;
 
-                uint32_t subgraph_begin = std::max(slope_regions[i].first >> 1,
+                uint32_t subpile_begin = std::max(slope_regions[i].first >> 1,
                     slope_regions[i + 1].first >> 1);
-                uint32_t subgraph_end = slope_regions[i].second;
+                uint32_t subpile_end = slope_regions[i].second;
 
-                for (uint32_t j = subgraph_begin; j < subgraph_end + 1; ++j) {
-                    if (!left_subgraph.empty() &&
-                        coverage_graph_[j] * q < left_subgraph.front().second) {
-
+                for (uint32_t j = subpile_begin; j < subpile_end + 1; ++j) {
+                    if (!left_subpile.empty() && data_[j] * q < left_subpile.front().second) {
                         if (found_down) {
                             if (j - last_down > 1) {
                                 subregions.emplace_back(first_down, last_down);
@@ -300,7 +237,7 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
                         }
                         last_down = j;
                     }
-                    coverageSubgraphAdd(left_subgraph, coverage_graph_[j], j);
+                    subpileAdd(left_subpile, data_[j], j);
                 }
                 if (found_down) {
                     subregions.emplace_back(first_down, last_down);
@@ -309,7 +246,7 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
                 for (const auto& it: subregions) {
                     slope_regions.emplace_back(it.first << 1 | 0, it.second);
                 }
-                slope_regions[i].second = subgraph_begin;
+                slope_regions[i].second = subpile_begin;
             }
 
             is_changed = true;
@@ -325,29 +262,28 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
     for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
         if ((slope_regions[i].first & 1) && !(slope_regions[i + 1].first & 1)) {
 
-            uint32_t subgraph_begin = slope_regions[i].second;
-            uint32_t subgraph_end = slope_regions[i + 1].first >> 1;
+            uint32_t subpile_begin = slope_regions[i].second;
+            uint32_t subpile_end = slope_regions[i + 1].first >> 1;
 
-            if (subgraph_end - subgraph_begin > static_cast<uint32_t>(k)) {
+            if (subpile_end - subpile_begin > static_cast<uint32_t>(k)) {
                 continue;
             }
 
-            uint16_t max_subgraph_coverage = 0;
-            for (uint32_t j = subgraph_begin + 1; j < subgraph_end; ++j) {
-                max_subgraph_coverage = std::max(max_subgraph_coverage,
-                    coverage_graph_[j]);
+            uint16_t max_subpile_coverage = 0;
+            for (uint32_t j = subpile_begin + 1; j < subpile_end; ++j) {
+                max_subpile_coverage = std::max(max_subpile_coverage, data_[j]);
             }
 
             uint32_t last_valid_point = slope_regions[i].first >> 1;
-            for (uint32_t j = slope_regions[i].first >> 1; j <= subgraph_begin; ++j) {
-                if (max_subgraph_coverage > coverage_graph_[j] * q) {
+            for (uint32_t j = slope_regions[i].first >> 1; j <= subpile_begin; ++j) {
+                if (max_subpile_coverage > data_[j] * q) {
                     last_valid_point = j;
                 }
             }
 
             uint32_t first_valid_point = slope_regions[i + 1].second;
-            for (uint32_t j = subgraph_end; j <= slope_regions[i + 1].second; ++j) {
-                if (max_subgraph_coverage > coverage_graph_[j] * q) {
+            for (uint32_t j = subpile_end; j <= slope_regions[i + 1].second; ++j) {
+                if (max_subpile_coverage > data_[j] * q) {
                     first_valid_point = j;
                     break;
                 }
@@ -361,20 +297,45 @@ std::vector<std::pair<uint32_t, uint32_t>> ReadInfo::find_coverage_slopes(double
     return slope_regions;
 }
 
-void ReadInfo::update_coverage_graph(std::vector<uint32_t>& shrunken_overlaps) {
+void Pile::find_median() {
 
-    std::sort(shrunken_overlaps.begin(), shrunken_overlaps.end());
+    if (!corrected_data_.empty()) {
+        corrected_data_.swap(data_);
+    }
+
+    std::vector<uint16_t> valid_data(data_.begin() + begin_, data_.begin() + end_);
+
+    std::nth_element(valid_data.begin(), valid_data.begin() + valid_data.size() / 2,
+        valid_data.end());
+    median_ = valid_data[valid_data.size() / 2];
+
+    std::nth_element(valid_data.begin(), valid_data.begin() + valid_data.size() / 10,
+        valid_data.end());
+    p10_ = valid_data[valid_data.size() / 10];
+
+    if (!corrected_data_.empty()) {
+        corrected_data_.swap(data_);
+    }
+}
+
+void Pile::add_layers(std::vector<uint32_t>& overlap_bounds) {
+
+    if (overlap_bounds.empty()) {
+        return;
+    }
+
+    std::sort(overlap_bounds.begin(), overlap_bounds.end());
 
     uint16_t coverage = 0;
-    uint32_t last_position = 0;
-    for (const auto& position: shrunken_overlaps) {
+    uint32_t last_bound = 0;
+    for (const auto& bound: overlap_bounds) {
         if (coverage > 0) {
-            for (uint32_t i = last_position; i < (position >> 1); ++i) {
-                coverage_graph_[i] += coverage;
+            for (uint32_t i = last_bound; i < (bound >> 1); ++i) {
+                data_[i] += coverage;
             }
         }
-        last_position = position >> 1;
-        if (position & 1) {
+        last_bound = bound >> 1;
+        if (bound & 1) {
             --coverage;
         } else {
             ++coverage;
@@ -382,96 +343,101 @@ void ReadInfo::update_coverage_graph(std::vector<uint32_t>& shrunken_overlaps) {
     }
 }
 
-bool ReadInfo::shrink_coverage_graph(uint32_t begin, uint32_t end) {
+bool Pile::shrink(uint32_t begin, uint32_t end) {
 
-    assert(begin <= end);
+    if (begin > end) {
+        fprintf(stderr, "[rala::Pile::shrink] error: "
+            "invalid begin, end coordinates!\n");
+        exit(1);
+    }
 
     if (end - begin < 1000) {
         return false;
     }
 
     for (uint32_t i = begin_; i < begin; ++i) {
-        coverage_graph_[i] = 0;
+        data_[i] = 0;
     }
     begin_ = begin;
 
     for (uint32_t i = end; i < end_; ++i) {
-        coverage_graph_[i] = 0;
+        data_[i] = 0;
     }
     end_ = end;
 
     return true;
 }
 
-void ReadInfo::correct_coverage_graph(
-    const std::vector<uint32_t>& shrunken_overlaps,
-    const std::vector<std::unique_ptr<ReadInfo>>& read_infos) {
+void Pile::correct(const std::vector<std::shared_ptr<Overlap>>& overlaps,
+    const std::vector<std::unique_ptr<Pile>>& piles) {
 
-    if (corrected_coverage_graph_.empty()) {
-        corrected_coverage_graph_ = coverage_graph_;
+    if (overlaps.empty()) {
+        return;
     }
 
-    for (uint32_t i = 0; i < shrunken_overlaps.size(); i += 6) {
-        const auto& other = read_infos[shrunken_overlaps[i + 2]];
+    if (corrected_data_.empty()) {
+        corrected_data_ = data_;
+    }
 
-        uint32_t begin = begin_ + shrunken_overlaps[i];
-        uint32_t end = begin_ + shrunken_overlaps[i + 1];
-        uint32_t other_begin = other->begin_ + shrunken_overlaps[i + 3];
-        uint32_t other_end = other->begin_ + shrunken_overlaps[i + 4];
-        uint32_t orientation = shrunken_overlaps[i + 5];
+    for (const auto& it: overlaps) {
 
-        assert(other != nullptr);
-        assert(begin_ <= begin && begin < end_);
-        assert(begin_ < end && end <= end_);
-        assert(other->begin_ <= other_begin && other_begin < other->end_);
-        assert(other->begin_ < other_end && other_end <= other->end_);
+        const auto& other = piles[(it->a_id() == id_ ? it->b_id() : it->a_id())];
 
-        uint32_t correction_length = std::min(end - begin, other_end -
-            other_begin);
+        if (other == nullptr) {
+            fprintf(stderr, "[rala::Pile::correct] error: missing other pile!\n");
+            exit(1);
+        }
 
-        for (uint32_t j = 0; j < correction_length; ++j) {
-            if (orientation == 0) {
-                corrected_coverage_graph_[begin + j] = std::max(
-                    corrected_coverage_graph_[begin + j],
-                    other->coverage_graph_[other_begin + j]);
+        uint32_t begin, end, other_begin, other_end;
+
+        if (it->a_id() == id_) {
+            begin = begin_ + it->a_begin();
+            end = begin_ + it->a_end();
+            other_begin = other->begin_ + it->b_begin();
+            other_end = other->begin_ + it->b_end();
+        } else {
+            begin = begin_ + it->b_begin();
+            end = begin_ + it->b_end();
+            other_begin = other->begin_ + it->a_begin();
+            other_end = other->begin_ + it->a_end();
+        }
+
+        if (begin < begin_ || begin >= end_ || end <= begin_ || end > end_) {
+            fprintf(stderr, "[rala::Pile::correct] error: "
+                "invalid begin, end coordinates!\n");
+            exit(1);
+        }
+        if (other_begin < other->begin_ || other_begin >= other->end_ ||
+            other_end <= other->begin_ || other_end > other->end_) {
+            fprintf(stderr, "[rala::Pile::correct] error: "
+                "invalid other begin, end coordinates!\n");
+            exit(1);
+        }
+
+        uint32_t correction_length = std::min(other_end - other_begin,
+            end - begin);
+
+        for (uint32_t i = 0; i < correction_length; ++i) {
+            if (it->orientation() == 0) {
+                corrected_data_[begin + i] = std::max(corrected_data_[begin + i],
+                    other->data_[other_begin + i]);
             } else {
-                corrected_coverage_graph_[begin + j] = std::max(
-                    corrected_coverage_graph_[begin + j],
-                    other->coverage_graph_[other_end - j - 1]);
+                corrected_data_[begin + i] = std::max(corrected_data_[begin + i],
+                    other->data_[other_end - i - 1]);
             }
         }
     }
 }
 
-void ReadInfo::find_coverage_median() {
-
-    if (!corrected_coverage_graph_.empty()) {
-        corrected_coverage_graph_.swap(coverage_graph_);
-    }
-
-    std::vector<uint16_t> tmp(coverage_graph_.begin() + begin_,
-        coverage_graph_.begin() + end_);
-    std::sort(tmp.begin(), tmp.end());
-
-    coverage_p10_ = tmp[tmp.size() / 10];
-
-    coverage_median_ = tmp.size() % 2 == 1 ? tmp[tmp.size() / 2] :
-        (tmp[tmp.size() / 2 - 1] + tmp[tmp.size() / 2]) / 2;
-
-    if (!corrected_coverage_graph_.empty()) {
-        corrected_coverage_graph_.swap(coverage_graph_);
-    }
-}
-
-bool ReadInfo::find_valid_region() {
+bool Pile::find_valid_region() {
 
     uint32_t new_begin = 0, new_end = 0, current_begin = 0;
     bool found_begin = false;
     for (uint32_t i = begin_; i < end_; ++i) {
-        if (!found_begin && coverage_graph_[i] >= 3) {
+        if (!found_begin && data_[i] >= 3) {
             current_begin = i;
             found_begin = true;
-        } else if (found_begin && coverage_graph_[i] < 3) {
+        } else if (found_begin && data_[i] < 3) {
             if (i - current_begin > new_end - new_begin) {
                 new_begin = current_begin;
                 new_end = i;
@@ -486,22 +452,22 @@ bool ReadInfo::find_valid_region() {
         }
     }
 
-    return this->shrink_coverage_graph(new_begin, new_end);
+    return shrink(new_begin, new_end);
 }
 
-bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
+bool Pile::find_chimeric_regions(uint16_t dataset_median) {
 
-    if (coverage_median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, coverage_p10_);
+    if (median_ > 1.42 * dataset_median) {
+        dataset_median = std::max(dataset_median, p10_);
     }
 
     // look for chimeric pits
-    auto slope_regions = this->find_coverage_slopes(1.817);
+    auto slope_regions = find_slopes(1.817);
 
     if (!slope_regions.empty()) {
         auto is_chimeric_slope_region = [&](uint32_t begin, uint32_t end) -> bool {
             for (uint32_t i = begin; i < end; ++i) {
-                if (coverage_graph_[i] <= dataset_median / 2) {
+                if (data_[i] <= dataset_median / 2) {
                     return true;
                 }
             }
@@ -534,13 +500,13 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
             new_begin = last_slope;
             new_end = end_;
         }
-        if (!this->shrink_coverage_graph(new_begin, new_end)) {
+        if (!shrink(new_begin, new_end)) {
             return false;
         }
     }
 
     // look for chimeric hills
-    slope_regions = this->find_coverage_slopes(1.3);
+    slope_regions = find_slopes(1.3);
 
     std::vector<std::pair<uint32_t, uint32_t>> chimeric_hills;
     for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
@@ -556,10 +522,10 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
                 continue;
             }
             found_hill = true;
-            auto hill_type = checkCoverageHill(slope_regions[i], slope_regions[j],
-                dataset_median, coverage_graph_, begin_, end_);
+            auto hill_type = hillType(slope_regions[i], slope_regions[j],
+                dataset_median, data_, begin_, end_);
 
-            if (hill_type == CoverageHillType::kChimeric) {
+            if (hill_type == HillType::kChimeric) {
                 uint32_t begin = slope_regions[i].second - 0.126 *
                     (slope_regions[i].second - (slope_regions[i].first >> 1));
                 uint32_t end = (slope_regions[j].first >> 1) + 0.126 *
@@ -572,7 +538,7 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
     }
 
     if (!chimeric_hills.empty()) {
-        mergeCoverageHills(chimeric_hills);
+        hillMerge(chimeric_hills);
 
         uint32_t new_begin = begin_, new_end = chimeric_hills.front().first;
         for (uint32_t i = 0; i < chimeric_hills.size() - 1; ++i) {
@@ -588,23 +554,23 @@ bool ReadInfo::find_chimeric_region(uint16_t dataset_median) {
             new_end = end_;
         }
 
-        return this->shrink_coverage_graph(new_begin, new_end);
+        return shrink(new_begin, new_end);
     }
 
     return true;
 }
 
-void ReadInfo::find_repetitive_region(uint16_t dataset_median) {
+void Pile::find_repetitive_regions(uint16_t dataset_median) {
 
-    if (!corrected_coverage_graph_.empty()) {
-        corrected_coverage_graph_.swap(coverage_graph_);
+    if (!corrected_data_.empty()) {
+        corrected_data_.swap(data_);
     }
 
-    if (coverage_median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, coverage_p10_);
+    if (median_ > 1.42 * dataset_median) {
+        dataset_median = std::max(dataset_median, p10_);
     }
 
-    auto slope_regions = this->find_coverage_slopes(1.3);
+    auto slope_regions = find_slopes(1.3);
 
     std::vector<std::pair<uint32_t, uint32_t>> repeat_hills;
     for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
@@ -620,10 +586,10 @@ void ReadInfo::find_repetitive_region(uint16_t dataset_median) {
                 continue;
             }
             found_hill = true;
-            auto hill_type = checkCoverageHill(slope_regions[i], slope_regions[j],
-                dataset_median, coverage_graph_, begin_, end_);
+            auto hill_type = hillType(slope_regions[i], slope_regions[j],
+                dataset_median, data_, begin_, end_);
 
-            if (hill_type == CoverageHillType::kRepeat) {
+            if (hill_type == HillType::kRepeat) {
                 uint32_t begin = slope_regions[i].second - 0.336 *
                     (slope_regions[i].second - (slope_regions[i].first >> 1));
                 uint32_t end = (slope_regions[j].first >> 1) + 0.336 *
@@ -635,27 +601,27 @@ void ReadInfo::find_repetitive_region(uint16_t dataset_median) {
     }
 
     // store repetitive hills
-    mergeCoverageHills(repeat_hills);
+    hillMerge(repeat_hills);
     for (const auto& it: repeat_hills) {
         uint32_t hill_begin = std::max(begin_, it.first),
             hill_end = std::min(end_, it.second);
         if (hill_begin < hill_end) {
-            coverage_hills_.emplace_back(hill_begin, hill_end);
+            hills_.emplace_back(hill_begin, hill_end);
         }
     }
 
-    if (!corrected_coverage_graph_.empty()) {
-        corrected_coverage_graph_.swap(coverage_graph_);
+    if (!corrected_data_.empty()) {
+        corrected_data_.swap(data_);
     }
 }
 
-bool ReadInfo::is_valid_overlap(uint32_t begin, uint32_t end) const {
+bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
 
     begin += begin_;
     end += begin_;
     uint32_t fuzz = 0.042 * (end_ - begin_);
 
-    for (const auto& it: coverage_hills_) {
+    for (const auto& it: hills_) {
         if (begin < it.second && it.first < end) {
             if (it.first < 0.1 * (end_ - begin_) + begin_) {
                 // left hill
@@ -674,24 +640,23 @@ bool ReadInfo::is_valid_overlap(uint32_t begin, uint32_t end) const {
     return true;
 }
 
-void ReadInfo::print_csv(std::string path, uint16_t dataset_median) const {
+void Pile::print_csv(std::string path, uint16_t dataset_median) const {
 
-    std::vector<uint8_t> slope_graph(coverage_graph_.size(), 0);
-    for (const auto& it: coverage_hills_) {
+    std::vector<uint8_t> slope_graph(data_.size(), 0);
+    for (const auto& it: hills_) {
         slope_graph[it.first] = 2;
         slope_graph[it.second] = 1;
     }
 
-    const std::vector<uint16_t>& corrected_coverage_graph =
-        corrected_coverage_graph_.empty() ? coverage_graph_ :
-        corrected_coverage_graph_;
+    const std::vector<uint16_t>& corrected_data = corrected_data_.empty() ?
+        data_ : corrected_data_;
 
     std::ofstream out(path);
     out << "x " << id_ << " slopes median dataset_median y" << std::endl;
-    for (uint32_t i = 0; i < coverage_graph_.size(); ++i) {
-        out << i << " " << coverage_graph_[i] << " " <<
-            (uint16_t) slope_graph[i] << " " << coverage_median_ << " " <<
-            dataset_median << " " << corrected_coverage_graph[i] << std::endl;
+    for (uint32_t i = 0; i < data_.size(); ++i) {
+        out << i << " " << data_[i] << " " <<
+            (uint16_t) slope_graph[i] << " " << median_ << " " << dataset_median <<
+            " " << corrected_data[i] << std::endl;
     }
     out.close();
 }

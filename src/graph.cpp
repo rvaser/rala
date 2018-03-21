@@ -4,36 +4,34 @@
  * @brief Graph class source file
  */
 
-#include <set>
-#include <list>
 #include <deque>
 #include <algorithm>
 #include <iostream>
 #include <fstream>
-#include <unordered_map>
 
-#include "read.hpp"
+#include "sequence.hpp"
 #include "overlap.hpp"
-#include "graph.hpp"
+#include "pile.hpp"
 #include "timer.hpp"
+#include "graph.hpp"
 
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
 
 namespace rala {
 
-constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~ 1GB
+constexpr uint32_t kChunkSize = 1024 * 1024 * 1024; // ~1GB
 
 bool comparable(double a, double b, double eps) {
     return (a >= b * (1 - eps) && a <= b * (1 + eps)) ||
         (b >= a * (1 - eps) && b <= a * (1 + eps));
 }
 
-template<class T>
-void shrinkVector(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
+template<typename T>
+void shrinkToFit(std::vector<T>& src, uint64_t begin) {
 
-    uint64_t i = begin, j = begin;
-    for (; i < src.size(); ++i) {
+    uint64_t i = begin;
+    for (uint64_t j = begin; i < src.size(); ++i) {
         if (src[i] != nullptr) {
             continue;
         }
@@ -46,7 +44,7 @@ void shrinkVector(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
         if (j >= src.size()) {
             break;
         } else if (i != j) {
-            src[i].swap(src[j]);
+            std::swap(src[i], src[j]);
         }
     }
     if (i < src.size()) {
@@ -56,217 +54,204 @@ void shrinkVector(std::vector<std::unique_ptr<T>>& src, uint64_t begin) {
 
 class Graph::Node {
 public:
-    // Encapsulating read
-    Node(uint32_t _id, uint32_t _read_id, const std::string& _read_name,
-        const std::string& _sequence)
-            : id(_id), read_id(_read_id), read_name(_read_name), pair(), sequence(_sequence),
-            prefix_edges(), suffix_edges(), read_ids(1, _read_id),
-            unitig_size(1), mark(false), rc(id % 2) {
-
-        auto is_unitig = read_name.find("Utg=");
-        if (is_unitig != std::string::npos) {
-            unitig_size = atoi(read_name.c_str() + is_unitig + 4);
-        }
-    }
+    // Sequence encapsulation
+    Node(uint64_t id, uint64_t sequence_id, const std::string& name,
+        const std::string& data);
     // Unitig
-    Node(uint32_t _id, Node* begin_node, Node* end_node,
-        std::unordered_set<uint32_t>& marked_edges);
-    // Circular unitig
-    Node(uint32_t _id, Node* begin_node,
-        std::unordered_set<uint32_t>& marked_edges);
+    Node(uint64_t id, Node* begin_node, Node* end_node,
+        std::unordered_set<uint64_t>& marked_nodes,
+        std::unordered_set<uint64_t>& marked_edges);
     Node(const Node&) = delete;
     const Node& operator=(const Node&) = delete;
 
-    ~Node() {}
+    ~Node();
+
+    bool is_rc() const {
+        return id_ & 1;
+    }
 
     uint32_t length() const {
-        return sequence.size();
+        return data_.size();
     }
 
-    uint32_t in_degree() const {
-        return prefix_edges.size();
+    uint32_t indegree() const {
+        return prefix_edges_.size();
     }
 
-    uint32_t out_degree() const {
-        return suffix_edges.size();
+    uint32_t outdegree() const {
+        return suffix_edges_.size();
     }
 
     bool is_junction() const {
-        return (out_degree() > 1 || in_degree() > 1);
+        return outdegree() > 1 || indegree() > 1;
     }
 
     bool is_tip() const {
-        return (out_degree() > 0 && in_degree() == 0 && unitig_size < 6);
+        return outdegree() > 0 && indegree() == 0 && sequence_ids_.size() < 6;
     }
 
-    uint32_t id;
-    uint32_t read_id;
-    std::string read_name;
-    Node* pair;
-    std::string sequence;
-    std::list<Edge*> prefix_edges;
-    std::list<Edge*> suffix_edges;
-    std::vector<uint32_t> read_ids;
-    uint32_t unitig_size;
-    bool mark;
-    bool rc;
+    uint64_t id_;
+    std::string name_;
+    std::string data_;
+    std::vector<Edge*> prefix_edges_;
+    std::vector<Edge*> suffix_edges_;
+    std::vector<uint64_t> sequence_ids_;
+    bool is_marked_;
+    Node* pair_;
 };
 
 class Graph::Edge {
 public:
-    // Encapsulating overlap
-    Edge(uint32_t _id, Node* _begin_node, Node* _end_node, uint32_t _length)
-            : id(_id), pair(), begin_node(_begin_node), end_node(_end_node),
-            length(_length), mark(false) {
-    }
+    // Overlap encapsulatipn
+    Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length);
     Edge(const Edge&) = delete;
     const Edge& operator=(const Edge&) = delete;
 
-    ~Edge() {}
+    ~Edge();
 
     std::string label() const {
-        return begin_node->sequence.substr(0, length);
+        return begin_node_->data_.substr(0, length_);
     }
 
-    uint32_t id;
-    Edge* pair;
-    Node* begin_node;
-    Node* end_node;
-    uint32_t length;
-    bool mark;
+    uint64_t id_;
+    Node* begin_node_;
+    Node* end_node_;
+    uint32_t length_;
+    bool is_marked_;
+    Edge* pair_;
 };
 
-Graph::Node::Node(uint32_t _id, Node* begin_node, Node* end_node,
-    std::unordered_set<uint32_t>& marked_edges) :
-        id(_id), read_id(), read_name(), pair(), sequence(), prefix_edges(), suffix_edges(),
-        read_ids(), unitig_size(), mark(false) {
-
-    if (!begin_node->prefix_edges.empty()) {
-        begin_node->prefix_edges.front()->end_node = this;
-        prefix_edges.push_back(begin_node->prefix_edges.front());
-    }
-
-    uint32_t length = 0;
-    Node* curr_node = begin_node;
-    while (curr_node->id != end_node->id) {
-        auto* edge = curr_node->suffix_edges.front();
-        edge->mark = true;
-        marked_edges.insert(edge->id);
-
-        read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
-        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(),
-            curr_node->read_ids.end());
-
-        unitig_size += curr_node->unitig_size;
-        length += edge->length;
-        sequence += edge->label();
-
-        curr_node->prefix_edges.clear();
-        curr_node->suffix_edges.clear();
-        curr_node->mark = true;
-
-        curr_node = edge->end_node;
-    }
-
-    read_ids.reserve(read_ids.size() + end_node->read_ids.size());
-    read_ids.insert(read_ids.end(), end_node->read_ids.begin(),
-        end_node->read_ids.end());
-
-    unitig_size += end_node->unitig_size;
-    sequence += end_node->sequence;
-
-    if (!end_node->suffix_edges.empty()) {
-        end_node->suffix_edges.front()->begin_node = this;
-        end_node->suffix_edges.front()->length += length;
-        suffix_edges.push_back(end_node->suffix_edges.front());
-    }
-
-    end_node->prefix_edges.clear();
-    end_node->suffix_edges.clear();
-    end_node->mark = true;
-
-    rc = begin_node->rc;
+Graph::Node::Node(uint64_t id, uint64_t sequence_id, const std::string& name,
+    const std::string& data)
+        : id_(id), name_(name), data_(data), prefix_edges_(), suffix_edges_(),
+        sequence_ids_(1, sequence_id), is_marked_(false), pair_() {
 }
 
-Graph::Node::Node(uint32_t _id, Node* begin_node,
-    std::unordered_set<uint32_t>& marked_edges) :
-        id(_id), read_id(), read_name(), pair(), sequence(), prefix_edges(), suffix_edges(),
-        read_ids(), unitig_size(), mark(false) {
+Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
+    std::unordered_set<uint64_t>& marked_nodes,
+    std::unordered_set<uint64_t>& marked_edges)
+        : id_(id), name_(), data_(), prefix_edges_(), suffix_edges_(),
+        sequence_ids_(), is_marked_(false), pair_() {
 
-    uint32_t length = 0;
-    Node* curr_node = begin_node;
+    if (begin_node == nullptr) {
+        fprintf(stderr, "[rala::Graph::Node::Node] error: missing begin node!\n");
+        exit(1);
+    }
+    if (end_node == nullptr) {
+        fprintf(stderr, "[rala::Graph::Node::Node] error: missing end node!\n");
+        exit(1);
+    }
+
+    if (begin_node != end_node) {
+        if (begin_node->indegree() != 0) {
+            begin_node->prefix_edges_[0]->end_node_ = this;
+            prefix_edges_.emplace_back(begin_node->prefix_edges_[0]);
+        }
+    }
+
+    uint32_t edge_length = 0;
+    auto node = begin_node;
     while (true) {
-        auto* edge = curr_node->suffix_edges.front();
-        edge->mark = true;
-        marked_edges.insert(edge->id);
+        auto edge = node->suffix_edges_[0];
 
-        read_ids.reserve(read_ids.size() + curr_node->read_ids.size());
-        read_ids.insert(read_ids.end(), curr_node->read_ids.begin(),
-            curr_node->read_ids.end());
+        data_ += edge->label();
+        sequence_ids_.insert(sequence_ids_.end(),
+            node->sequence_ids_.begin(),
+            node->sequence_ids_.end());
+        edge_length += edge->length_;
 
-        unitig_size += curr_node->unitig_size;
-        length += edge->length;
-        sequence += edge->label();
+        edge->is_marked_ = true;
+        marked_edges.emplace(edge->id_);
+        node->is_marked_ = true;
+        marked_nodes.emplace(node->id_);
 
-        curr_node->prefix_edges.clear();
-        curr_node->suffix_edges.clear();
-        curr_node->mark = true;
-
-        curr_node = edge->end_node;
-        if (curr_node->id == begin_node->id) {
+        node = edge->end_node_;
+        if (node == end_node) {
             break;
         }
     }
 
-    rc = begin_node->rc;
+    if (begin_node != end_node) {
+        data_ += end_node->data_;
+        sequence_ids_.insert(sequence_ids_.end(),
+            end_node->sequence_ids_.begin(),
+            end_node->sequence_ids_.end());
+
+        end_node->is_marked_ = true;
+        marked_nodes.emplace(end_node->id_);
+
+        if (end_node->outdegree() != 0) {
+            end_node->suffix_edges_[0]->begin_node_ = this;
+            end_node->suffix_edges_[0]->length_ += edge_length;
+            suffix_edges_.push_back(end_node->suffix_edges_[0]);
+        }
+    }
 }
 
-std::unique_ptr<Graph> createGraph(const std::string& reads_path,
+Graph::Node::~Node() {
+}
+
+Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length)
+        : id_(id), begin_node_(begin_node), end_node_(end_node), length_(length),
+        is_marked_(false), pair_() {
+}
+
+Graph::Edge::~Edge() {
+}
+
+std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
     const std::string& overlaps_path, uint32_t num_threads) {
 
-    return std::unique_ptr<Graph>(new Graph(reads_path, overlaps_path,
+    std::unique_ptr<bioparser::Parser<Sequence>> sparser = nullptr;
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
+
+    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
+        if (src.size() < suffix.size()) {
+            return false;
+        }
+        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    if (is_suffix(sequences_path, ".fasta") || is_suffix(sequences_path, ".fa") ||
+        is_suffix(sequences_path, ".fasta.gz") || is_suffix(sequences_path, ".fa.gz")) {
+        sparser = bioparser::createParser<bioparser::FastaParser, Sequence>(
+            sequences_path);
+    } else if (is_suffix(sequences_path, ".fastq") || is_suffix(sequences_path, ".fq") ||
+        is_suffix(sequences_path, ".fastq.gz") || is_suffix(sequences_path, ".fq.gz")) {
+        sparser = bioparser::createParser<bioparser::FastqParser, Sequence>(
+            sequences_path);
+    } else {
+        fprintf(stderr, "[rala::createGraph] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".fasta, .fasta.gz, .fa, .fa.gz, .fastq, .fastq.gz, .fq, .fq.gz)!\n",
+            sequences_path.c_str());
+        exit(1);
+    }
+
+    if (is_suffix(overlaps_path, ".mhap") || is_suffix(overlaps_path, ".mhap.gz")) {
+        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(
+            overlaps_path);
+    } else if (is_suffix(overlaps_path, ".paf") || is_suffix(overlaps_path, ".paf.gz")) {
+        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(
+            overlaps_path);
+    } else {
+        fprintf(stderr, "[rala::createGraph] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", overlaps_path.c_str());
+        exit(1);
+    }
+
+    return std::unique_ptr<Graph>(new Graph(std::move(sparser), std::move(oparser),
         num_threads));
 }
 
-Graph::Graph(const std::string& reads_path, const std::string& overlaps_path,
+Graph::Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser,
     uint32_t num_threads)
-        : rreader_(nullptr), read_infos_(), coverage_median_(0),
-        oreader_(nullptr), overlap_infos_(), thread_pool_(nullptr), nodes_(),
-        edges_(), marked_edges_() {
-
-    thread_pool_ = thread_pool::createThreadPool(num_threads);
-
-    auto extension = reads_path.substr(std::min(reads_path.rfind('.'),
-        reads_path.size()));
-    if (extension == ".fasta" || extension == ".fa") {
-        rreader_ = bioparser::createReader<Read, bioparser::FastaReader>(
-            reads_path);
-    } else if (extension == ".fastq" || extension == ".fq") {
-        rreader_ = bioparser::createReader<Read, bioparser::FastqReader>(
-            reads_path);
-    } else {
-        fprintf(stderr, "rala::Graph::Graph error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".fasta, .fa, .fastq, .fq)!\n",
-            reads_path.c_str());
-        exit(1);
-    }
-
-    extension = overlaps_path.substr(std::min(overlaps_path.rfind('.'),
-        overlaps_path.size()));
-    if (extension == ".paf") {
-        oreader_ = bioparser::createReader<Overlap, bioparser::PafReader>(
-            overlaps_path);
-    } else if (extension == ".mhap") {
-        oreader_ = bioparser::createReader<Overlap, bioparser::MhapReader>(
-            overlaps_path);
-    } else {
-        fprintf(stderr, "rala::Graph::Graph error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".paf, .mhap)!\n",
-            overlaps_path.c_str());
-        exit(1);
-    }
+        : sparser_(std::move(sparser)), name_to_id_(), piles_(),
+        coverage_median_(0), oparser_(std::move(oparser)), is_valid_overlap_(),
+        thread_pool_(thread_pool::createThreadPool(num_threads)),
+        nodes_(), edges_() {
 }
 
 Graph::~Graph() {
@@ -274,136 +259,148 @@ Graph::~Graph() {
 
 void Graph::initialize() {
 
-    fprintf(stderr, "Graph::initialize {\n");
-    Timer timer; timer.start();
+    Timer timer;
+    timer.start();
 
-    std::vector<std::unique_ptr<ReadInfo>>().swap(read_infos_);
-
-    // store overlaps
-    std::vector<std::shared_ptr<Overlap>> current_overlaps;
-    std::vector<std::vector<uint32_t>> shrunken_overlaps;
-    uint32_t num_duplicate_overlaps = 0;
-
-    auto remove_duplicate_overlaps = [&]() -> void {
-        for (uint32_t i = 0; i < current_overlaps.size(); ++i) {
-            if (!overlap_infos_[current_overlaps[i]->id()]) {
-                continue;
-            }
-            for (uint32_t j = i + 1; j < current_overlaps.size(); ++j) {
-                if (!overlap_infos_[current_overlaps[j]->id()] ||
-                    current_overlaps[i]->b_id() != current_overlaps[j]->b_id()) {
-                    continue;
-                }
-                ++num_duplicate_overlaps;
-
-                if (current_overlaps[i]->length() >
-                    current_overlaps[j]->length()) {
-                    overlap_infos_[current_overlaps[j]->id()] = false;
-                } else {
-                    overlap_infos_[current_overlaps[i]->id()] = false;
-                    break;
-                }
-            }
-        }
-        return;
-    };
-
-    auto shrink_valid_overlaps = [&]() -> void {
-        for (const auto& it: current_overlaps) {
-            shrunken_overlaps[it->a_id()].push_back((it->a_begin() + 1) << 1 | 0);
-            shrunken_overlaps[it->a_id()].push_back((it->a_end() - 1) << 1 | 1);
-            shrunken_overlaps[it->b_id()].push_back((it->b_begin() + 1) << 1 | 0);
-            shrunken_overlaps[it->b_id()].push_back((it->b_end() - 1) << 1 | 1);
-        }
-        current_overlaps.clear();
-    };
-
-    std::vector<uint32_t> read_lengths;
-    uint32_t num_self_overlaps = 0;
-
-    std::vector<std::future<void>> thread_futures;
-
-    oreader_->rewind();
+    // create piles and sequence name hash
+    uint64_t num_sequences = 0;
+    sparser_->reset();
     while (true) {
-        std::vector<std::shared_ptr<Overlap>> overlaps;
-        auto status = oreader_->read_objects(overlaps, kChunkSize);
+        std::vector<std::unique_ptr<Sequence>> sequences;
+        auto status = sparser_->parse_objects(sequences, kChunkSize);
 
-        overlap_infos_.resize(overlap_infos_.size() + overlaps.size(), true);
-
-        for (const auto& it: overlaps) {
-            uint32_t max_read_id = std::max(it->a_id(), it->b_id());
-            if (shrunken_overlaps.size() <= max_read_id) {
-                shrunken_overlaps.resize(max_read_id + 1);
-                read_lengths.resize(max_read_id + 1);
-            }
-
-            if (read_infos_.size() <= max_read_id) {
-                read_infos_.resize(max_read_id + 1);
-            }
-
-            read_lengths[it->a_id()] = it->a_length();
-
-            if (it->a_id() == it->b_id()) {
-                overlap_infos_[it->id()] = false;
-                ++num_self_overlaps;
-                continue;
-            }
-
-            read_lengths[it->b_id()] = it->b_length();
-
-            if (current_overlaps.size() != 0 &&
-                current_overlaps.front()->a_id() != it->a_id()) {
-
-                remove_duplicate_overlaps();
-                shrink_valid_overlaps();
-            }
-            current_overlaps.push_back(it);
+        for (uint64_t i = 0; i < sequences.size(); ++i, ++num_sequences) {
+            name_to_id_[sequences[i]->name()] = num_sequences;
+            piles_.emplace_back(createPile(num_sequences,
+                sequences[i]->data().size()));
         }
-
-        overlaps.clear();
 
         if (!status) {
-            remove_duplicate_overlaps();
-            shrink_valid_overlaps();
-        }
-
-        // create missing and update all coverage graphs
-        for (uint32_t i = 0; i < shrunken_overlaps.size(); ++i) {
-            if (shrunken_overlaps[i].empty()) {
-                continue;
-            }
-
-            if (read_infos_[i] == nullptr) {
-                read_infos_[i] = createReadInfo(i, read_lengths[i]);
-            }
-
-            thread_futures.emplace_back(thread_pool_->submit_task(
-                [&](uint32_t id) -> void {
-                    read_infos_[id]->update_coverage_graph(shrunken_overlaps[id]);
-                    std::vector<uint32_t>().swap(shrunken_overlaps[id]);
-                }, i));
-        }
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-        thread_futures.clear();
-
-        if (!status) {
-            std::vector<std::vector<uint32_t>>().swap(shrunken_overlaps);
             break;
         }
     }
 
+    fprintf(stderr, "[rala::Graph::initialize] loaded sequences\n");
+
+    // update piles
+    std::vector<std::unique_ptr<Overlap>> overlaps;
+    uint64_t num_overlaps = 0;
+
+    auto remove_duplicate_overlaps = [&](uint64_t begin, uint64_t end) -> void {
+        for (uint64_t i = begin; i < end; ++i) {
+            if (overlaps[i] == nullptr) {
+                continue;
+            }
+            if (overlaps[i]->a_id() == overlaps[i]->b_id()) {
+                is_valid_overlap_[num_overlaps + i] = false;
+                overlaps[i].reset();
+                continue;
+            }
+            for (uint64_t j = i + 1; j < end; ++j) {
+                if (overlaps[j] == nullptr) {
+                    continue;
+                }
+                if (overlaps[i]->b_id() != overlaps[j]->b_id()) {
+                    continue;
+                }
+
+                if (overlaps[i]->length() > overlaps[j]->length()) {
+                    is_valid_overlap_[num_overlaps + j] = false;
+                } else {
+                    is_valid_overlap_[num_overlaps + i] = false;
+                    break;
+                }
+            }
+        }
+    };
+
+    std::vector<std::vector<uint32_t>> overlap_bounds(piles_.size());
+
+    auto store_overlap_bounds = [&](uint64_t begin, uint64_t end) -> void {
+        for (uint64_t i = begin; i < end; ++i) {
+            if (overlaps[i] == nullptr) {
+                continue;
+            }
+            overlap_bounds[overlaps[i]->a_id()].emplace_back(
+                (overlaps[i]->a_begin() + 1) << 1);
+            overlap_bounds[overlaps[i]->a_id()].emplace_back(
+                (overlaps[i]->a_end() - 1) << 1 | 1);
+            overlap_bounds[overlaps[i]->b_id()].emplace_back(
+                (overlaps[i]->b_begin() + 1) << 1);
+            overlap_bounds[overlaps[i]->b_id()].emplace_back(
+                (overlaps[i]->b_end() - 1) << 1 | 1);
+        }
+    };
+
+    oparser_->reset();
+    while (true) {
+        uint64_t l = overlaps.size();
+        auto status = oparser_->parse_objects(overlaps, kChunkSize);
+
+        is_valid_overlap_.resize(is_valid_overlap_.size() + overlaps.size() - l, true);
+
+        uint64_t c = 0;
+        for (uint64_t i = l; i < overlaps.size(); ++i) {
+            if (!overlaps[i]->transmute(piles_, name_to_id_)) {
+                is_valid_overlap_[num_overlaps + i] = false;
+                overlaps[i].reset();
+                continue;
+            }
+
+            while (overlaps[c] == nullptr) {
+                ++c;
+            }
+            if (overlaps[c]->a_id() != overlaps[i]->a_id()) {
+                remove_duplicate_overlaps(c, i);
+                store_overlap_bounds(c, i);
+                c = i;
+            }
+        }
+        if (!status) {
+            remove_duplicate_overlaps(c, overlaps.size());
+            store_overlap_bounds(c, overlaps.size());
+            c = overlaps.size();
+        }
+        num_overlaps += c;
+
+        {
+            std::vector<std::unique_ptr<Overlap>> tmp;
+            for (uint64_t i = c; i < overlaps.size(); ++i) {
+                tmp.emplace_back(std::move(overlaps[i]));
+            }
+            overlaps.swap(tmp);
+        }
+
+        std::vector<std::future<void>> thread_futures;
+        for (const auto& it: piles_) {
+            thread_futures.emplace_back(thread_pool_->submit_task(
+                [&](uint64_t i) -> void {
+                    piles_[i]->add_layers(overlap_bounds[i]);
+                    std::vector<uint32_t>().swap(overlap_bounds[i]);
+                }, it->id()));
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+
+        if (!status) {
+            break;
+        }
+    }
+
+    fprintf(stderr, "[rala::Graph::initialize] loaded overlaps\n");
+
     // trim reads
-    for (const auto& it: read_infos_) {
+    std::vector<std::future<void>> thread_futures;
+    for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
 
         thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t id) -> void {
-                if (!read_infos_[id]->find_valid_region()) {
-                    read_infos_[id].reset();
+            [&](uint64_t i) -> void {
+                if (!piles_[i]->find_valid_region()) {
+                    piles_[i].reset();
                 };
             }, it->id()));
     }
@@ -412,36 +409,39 @@ void Graph::initialize() {
     }
     thread_futures.clear();
 
-    uint32_t num_prefiltered_reads = 0;
-    for (const auto& it: read_infos_) {
+    uint64_t num_prefiltered_sequences = 0;
+    for (const auto& it: piles_) {
         if (it == nullptr) {
-            ++num_prefiltered_reads;
+            ++num_prefiltered_sequences;
         }
     }
 
-    // log
-    fprintf(stderr, "  number of self overlaps = %u\n", num_self_overlaps);
-    fprintf(stderr, "  number of duplicate overlaps = %u\n", num_duplicate_overlaps);
-    fprintf(stderr, "  number of prefiltered reads = %u\n", num_prefiltered_reads);
-    timer.stop(); timer.print("  elapsed time =");
-    fprintf(stderr, "}\n");
+    if (num_prefiltered_sequences == num_sequences) {
+        fprintf(stderr, "[rala::Graph::initialize] error: empty sequence set!\n");
+        exit(1);
+    }
+
+    fprintf(stderr, "[rala::Graph::initialize] number of prefiltered sequences = %lu\n",
+        num_prefiltered_sequences);
+    timer.stop();
+    timer.print("[rala::Graph::initialize] elapsed time =");
 }
 
 void Graph::preprocess() {
 
-    fprintf(stderr, "Graph::preprocess {\n");
-    Timer timer; timer.start();
+    Timer timer;
+    timer.start();
 
     // find coverage median of the dataset
     std::vector<std::future<void>> thread_futures;
-    for (const auto& it: read_infos_) {
+    for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
 
         thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t id) -> void {
-                read_infos_[id]->find_coverage_median();
+            [&](uint32_t i) -> void {
+                piles_[i]->find_median();
             }, it->id()));
     }
     for (const auto& it: thread_futures) {
@@ -450,40 +450,45 @@ void Graph::preprocess() {
     thread_futures.clear();
 
     std::vector<uint16_t> medians;
-    for (const auto& it: read_infos_) {
+    for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
-        medians.emplace_back(it->coverage_median());
+        medians.emplace_back(it->median());
     }
 
-    std::sort(medians.begin(), medians.end());
-    coverage_median_ = medians.size() % 2 == 1 ?
-        medians[medians.size() / 2] :
-        (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
+    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+        medians.end());
+    coverage_median_ = medians[medians.size() / 2];
+
+    fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
+        coverage_median_);
 
     // filter low quality reads
-    uint32_t num_low_quality_reads = 0;
-    for (auto& it: read_infos_) {
+    /*uint32_t num_low_quality_reads = 0;
+    for (auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
-        if (it->coverage_median() * 2 < coverage_median_) {
+        if (it->median() * 2 < coverage_median_) {
             it.reset();
             ++num_low_quality_reads;
         }
     }
+    fprintf(stderr, "[rala::Graph::preprocess] number of low quality reads = %u\n",
+        num_low_quality_reads);
+    */
 
     // find chimeric reads
-    for (const auto& it: read_infos_) {
+    for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
 
         thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t id) -> void {
-                if (!read_infos_[id]->find_chimeric_region(coverage_median_)) {
-                    read_infos_[id].reset();
+            [&](uint32_t j) -> void {
+                if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
+                    piles_[j].reset();
                 }
             }, it->id()));
     }
@@ -492,24 +497,19 @@ void Graph::preprocess() {
     }
     thread_futures.clear();
 
-    // correct coverage graphs
-    std::vector<std::vector<uint32_t>> shrunken_overlaps(read_infos_.size());
-    oreader_->rewind();
-    while (true) {
-        std::vector<std::unique_ptr<Overlap>> overlaps;
-        auto status = oreader_->read_objects(overlaps, kChunkSize);
+    fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
 
-        for (auto& it: overlaps) {
-            if (it->a_id() == it->b_id() ||
-                read_infos_[it->a_id()] == nullptr ||
-                read_infos_[it->b_id()] == nullptr) {
-                it.reset();
-                continue;
-            }
-            if(!it->update(read_infos_[it->a_id()]->begin(),
-                read_infos_[it->a_id()]->end(),
-                read_infos_[it->b_id()]->begin(),
-                read_infos_[it->b_id()]->end())) {
+    // correct piles
+    oparser_->reset();
+    while (true) {
+        std::vector<std::vector<std::shared_ptr<Overlap>>> distributed_overlaps(piles_.size());
+
+        std::vector<std::shared_ptr<Overlap>> overlaps;
+        auto status = oparser_->parse_objects(overlaps, kChunkSize);
+
+        for (uint64_t i = 0; i < overlaps.size(); ++i) {
+            auto& it = overlaps[i];
+            if (!it->transmute(piles_, name_to_id_) || !it->trim(piles_)) {
                 it.reset();
                 continue;
             }
@@ -527,34 +527,20 @@ void Graph::preprocess() {
                 continue;
             }
 
-            shrunken_overlaps[it->a_id()].emplace_back(it->a_begin());
-            shrunken_overlaps[it->a_id()].emplace_back(it->a_end());
-            shrunken_overlaps[it->a_id()].emplace_back(it->b_id());
-            shrunken_overlaps[it->a_id()].emplace_back(it->b_begin());
-            shrunken_overlaps[it->a_id()].emplace_back(it->b_end());
-            shrunken_overlaps[it->a_id()].emplace_back(it->orientation());
-
-            shrunken_overlaps[it->b_id()].emplace_back(it->b_begin());
-            shrunken_overlaps[it->b_id()].emplace_back(it->b_end());
-            shrunken_overlaps[it->b_id()].emplace_back(it->a_id());
-            shrunken_overlaps[it->b_id()].emplace_back(it->a_begin());
-            shrunken_overlaps[it->b_id()].emplace_back(it->a_end());
-            shrunken_overlaps[it->b_id()].emplace_back(it->orientation());
-
-            it.reset();
+            distributed_overlaps[it->a_id()].emplace_back(it);
+            distributed_overlaps[it->b_id()].emplace_back(it);
         }
 
-        for (uint32_t i = 0; i < shrunken_overlaps.size(); ++i) {
-            if (shrunken_overlaps[i].empty()) {
+        for (const auto& it: piles_) {
+            if (it == nullptr) {
                 continue;
             }
 
             thread_futures.emplace_back(thread_pool_->submit_task(
-                [&](uint32_t id) -> void {
-                    read_infos_[id]->correct_coverage_graph(
-                        shrunken_overlaps[id], read_infos_);
-                    std::vector<uint32_t>().swap(shrunken_overlaps[id]);
-                }, i));
+                [&](uint64_t i) -> void {
+                    piles_[i]->correct(distributed_overlaps[i], piles_);
+                    std::vector<std::shared_ptr<Overlap>>().swap(distributed_overlaps[i]);
+                }, it->id()));
         }
         for (const auto& it: thread_futures) {
             it.wait();
@@ -562,17 +548,18 @@ void Graph::preprocess() {
         thread_futures.clear();
 
         if (!status) {
-            std::vector<std::vector<uint32_t>>().swap(shrunken_overlaps);
+            fprintf(stderr, "[rala::Graph::preprocess] load overlaps\n");
+            fprintf(stderr, "[rala::Graph::preprocess] corrected piles\n");
 
             // update coverage medians
-            for (const auto& it: read_infos_) {
+            for (const auto& it: piles_) {
                 if (it == nullptr) {
                     continue;
                 }
 
                 thread_futures.emplace_back(thread_pool_->submit_task(
-                    [&](uint32_t id) -> void {
-                        read_infos_[id]->find_coverage_median();
+                    [&](uint64_t i) -> void {
+                        piles_[i]->find_median();
                     }, it->id()));
             }
             for (const auto& it: thread_futures) {
@@ -581,31 +568,33 @@ void Graph::preprocess() {
             thread_futures.clear();
 
             std::vector<uint16_t> medians;
-            for (const auto& it: read_infos_) {
+            for (const auto& it: piles_) {
                 if (it == nullptr) {
                     continue;
                 }
-                medians.emplace_back(it->coverage_median());
+                medians.emplace_back(it->median());
             }
 
-            std::sort(medians.begin(), medians.end());
-            coverage_median_ = medians.size() % 2 == 1 ?
-                medians[medians.size() / 2] :
-                (medians[medians.size() / 2 - 1] + medians[medians.size() / 2]) / 2;
+            std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+                medians.end());
+            coverage_median_ = medians[medians.size() / 2];
+
+            fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
+                coverage_median_);
 
             break;
         }
     }
 
     // find repetitive regions
-    for (const auto& it: read_infos_) {
+    for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
 
         thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t id) -> void {
-                read_infos_[id]->find_repetitive_region(coverage_median_);
+            [&](uint32_t i) -> void {
+                piles_[i]->find_repetitive_regions(coverage_median_);
             }, it->id()));
     }
     for (const auto& it: thread_futures) {
@@ -613,47 +602,42 @@ void Graph::preprocess() {
     }
     thread_futures.clear();
 
-    // log
-    fprintf(stderr, "  dataset coverage median = %u\n", coverage_median_);
-    fprintf(stderr, "  number of low quality reads = %u\n", num_low_quality_reads);
-    timer.stop(); timer.print("  elapse time =");
-    fprintf(stderr, "}\n");
+    fprintf(stderr, "[rala::Graph::preprocess] processed repetitive sequences\n");
+
+    timer.stop();
+    timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
 void Graph::construct(bool preprocess) {
 
-    nodes_.clear();
-    edges_.clear();
-    marked_edges_.clear();
+    if (!piles_.empty()) {
+        fprintf(stderr, "[rala::Graph::construct] warning: "
+            "object already constructed!\n");
+        return;
+    }
 
-    this->initialize();
+    initialize();
     if (preprocess) {
         this->preprocess();
     }
 
-    fprintf(stderr, "Graph::construct {\n");
-    Timer timer; timer.start();
+    Timer timer;
+    timer.start();
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps;
-    oreader_->rewind();
+    uint64_t num_overlaps = 0;
+
+    oparser_->reset();
     while (true) {
-        uint64_t current_overlap_id = overlaps.size();
-        auto status = oreader_->read_objects(overlaps, kChunkSize);
+        uint64_t l = overlaps.size();
+        auto status = oparser_->parse_objects(overlaps, kChunkSize);
 
-        for (uint64_t i = current_overlap_id; i < overlaps.size(); ++i) {
+        for (uint64_t i = l; i < overlaps.size(); ++i) {
             auto& it = overlaps[i];
-            if (!overlap_infos_[it->id()] ||
-                read_infos_[it->a_id()] == nullptr ||
-                read_infos_[it->b_id()] == nullptr) {
-
-                it.reset();
-                continue;
-            }
-            if(!it->update(read_infos_[it->a_id()]->begin(),
-                read_infos_[it->a_id()]->end(),
-                read_infos_[it->b_id()]->begin(),
-                read_infos_[it->b_id()]->end())) {
+            if (!is_valid_overlap_[num_overlaps + i - l] ||
+                !it->transmute(piles_, name_to_id_) ||
+                !it->trim(piles_)) {
 
                 it.reset();
                 continue;
@@ -664,11 +648,11 @@ void Graph::construct(bool preprocess) {
                     it.reset();
                     break;
                 case OverlapType::kB:
-                    read_infos_[it->a_id()].reset();
+                    piles_[it->a_id()].reset();
                     it.reset();
                     break;
                 case OverlapType::kA:
-                    read_infos_[it->b_id()].reset();
+                    piles_[it->b_id()].reset();
                     it.reset();
                     break;
                 default:
@@ -680,81 +664,88 @@ void Graph::construct(bool preprocess) {
             }
 
             // check for false overlaps
-            if (!read_infos_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
-                !read_infos_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
+            if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
+                !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
+
                 it.reset();
             }
         }
+        num_overlaps += overlaps.size() - l;
 
-        shrinkVector(overlaps, current_overlap_id);
+        shrinkToFit(overlaps, l);
 
         if (!status) {
             // check if all non valid overlaps are deleted
             for (auto& it: overlaps) {
-                if (read_infos_[it->a_id()] == nullptr ||
-                    read_infos_[it->b_id()] == nullptr) {
+                if (it == nullptr) {
+                    continue;
+                }
+                if (piles_[it->a_id()] == nullptr ||
+                    piles_[it->b_id()] == nullptr) {
 
                     it.reset();
                 }
             }
-            shrinkVector(overlaps, 0);
+            shrinkToFit(overlaps, 0);
 
             break;
         }
     }
-    std::vector<bool>().swap(overlap_infos_);
+
+    fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
     // store reads
-    std::vector<std::unique_ptr<Read>> reads;
-    rreader_->rewind();
+    std::vector<std::unique_ptr<Sequence>> sequences;
+
+    sparser_->reset();
     while (true) {
-        uint64_t current_read_id = reads.size();
-        auto status = rreader_->read_objects(reads, kChunkSize);
+        uint64_t l = sequences.size();
+        auto status = sparser_->parse_objects(sequences, kChunkSize);
 
-        for (uint64_t i = current_read_id; i < reads.size(); ++i) {
-            auto& it = reads[i];
-            if (it->id() >= read_infos_.size()) {
-                it.reset();
+        for (uint64_t i = l; i < sequences.size(); ++i) {
+            if (piles_[i] == nullptr) {
+                sequences[i].reset();
                 continue;
             }
-            if (read_infos_[it->id()] == nullptr) {
-                it.reset();
-                continue;
-            }
-            it->update(read_infos_[it->id()]->begin(),
-                read_infos_[it->id()]->end());
-            // read_infos_[it->id()].reset();
+            sequences[i]->trim(piles_[i]->begin(), piles_[i]->end());
+            // piles_[i].reset();
         }
-
-        shrinkVector(reads, current_read_id);
 
         if (!status) {
             break;
         }
     }
 
+    fprintf(stderr, "[rala::Graph::construct] loaded sequences\n");
+
     // create assembly graph
-    std::vector<int32_t> read_id_to_node_id(reads.back()->id() + 1, -1);
-    uint32_t node_id = 0;
-    for (const auto& it: reads) {
-        read_id_to_node_id[it->id()] = node_id;
+    std::vector<int64_t> sequence_id_to_node_id(sequences.size(), -1);
+    uint64_t node_id = 0;
+    for (uint64_t i = 0; i < sequences.size(); ++i) {
+        if (sequences[i] == nullptr) {
+            continue;
+        }
+        const auto& it = sequences[i];
 
-        Node* node = new Node(node_id++, it->id(), it->name(), it->sequence());
-        Node* node_complement = new Node(node_id++, it->id(), it->name(),
-            it->reverse_complement());
+        sequence_id_to_node_id[i] = node_id;
 
-        node->pair = node_complement;
-        node_complement->pair = node;
+        std::unique_ptr<Node> node(new Node(node_id++, i, it->name(), it->data()));
+        std::unique_ptr<Node> node_complement(new Node(node_id++, i, it->name(),
+            it->reverse_complement()));
 
-        nodes_.push_back(std::unique_ptr<Node>(node));
-        nodes_.push_back(std::unique_ptr<Node>(node_complement));
+        node->pair_ = node_complement.get();
+        node_complement->pair_ = node.get();
+
+        nodes_.emplace_back(std::move(node));
+        nodes_.emplace_back(std::move(node_complement));
+
+        sequences[i].reset();
     }
 
-    uint32_t edge_id = 0;
-    for (const auto& it: overlaps) {
-
-        auto node_a = nodes_[read_id_to_node_id[it->a_id()]].get();
-        auto node_b = nodes_[read_id_to_node_id[it->b_id()] +
+    uint64_t edge_id = 0;
+    for (auto& it: overlaps) {
+        Node* node_a = nodes_[sequence_id_to_node_id[it->a_id()]].get();
+        Node* node_b = nodes_[sequence_id_to_node_id[it->b_id()] +
             it->orientation()].get();
 
         uint32_t a_begin = it->a_begin();
@@ -765,65 +756,74 @@ void Graph::construct(bool preprocess) {
             it->b_length() - it->b_begin();
 
         if (it->type() == OverlapType::kAB) {
-            Edge* edge = new Edge(edge_id++, node_a, node_b, a_begin - b_begin);
-            Edge* edge_complement = new Edge(edge_id++, node_b->pair,
-                node_a->pair, it->b_length() - b_end - it->a_length() + a_end);
+            std::unique_ptr<Edge> edge(new Edge(edge_id++, node_a, node_b,
+                a_begin - b_begin));
+            std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
+                node_b->pair_, node_a->pair_, (it->b_length() - b_end) -
+                (it->a_length() - a_end)));
 
-            edge->pair = edge_complement;
-            edge_complement->pair = edge;
+            edge->pair_ = edge_complement.get();
+            edge_complement->pair_ = edge.get();
 
-            edges_.push_back(std::unique_ptr<Edge>(edge));
-            edges_.push_back(std::unique_ptr<Edge>(edge_complement));
+            node_a->suffix_edges_.emplace_back(edge.get());
+            node_a->pair_->prefix_edges_.push_back(edge_complement.get());
+            node_b->prefix_edges_.push_back(edge.get());
+            node_b->pair_->suffix_edges_.push_back(edge_complement.get());
 
-            node_a->suffix_edges.push_back(edge);
-            node_a->pair->prefix_edges.push_back(edge_complement);
-            node_b->prefix_edges.push_back(edge);
-            node_b->pair->suffix_edges.push_back(edge_complement);
+            edges_.push_back(std::move(edge));
+            edges_.push_back(std::move(edge_complement));
 
         } else if (it->type() == OverlapType::kBA) {
-            Edge* edge = new Edge(edge_id++, node_b, node_a, b_begin - a_begin);
-            Edge* edge_complement = new Edge(edge_id++, node_a->pair,
-                node_b->pair, it->a_length() - a_end - it->b_length() + b_end);
+            std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
+                b_begin - a_begin));
+            std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
+                node_a->pair_, node_b->pair_, (it->a_length() - a_end) -
+                (it->b_length() - b_end)));
 
-            edge->pair = edge_complement;
-            edge_complement->pair = edge;
+            edge->pair_ = edge_complement.get();
+            edge_complement->pair_ = edge.get();
 
-            edges_.push_back(std::unique_ptr<Edge>(edge));
-            edges_.push_back(std::unique_ptr<Edge>(edge_complement));
+            node_b->suffix_edges_.push_back(edge.get());
+            node_b->pair_->prefix_edges_.push_back(edge_complement.get());
+            node_a->prefix_edges_.push_back(edge.get());
+            node_a->pair_->suffix_edges_.push_back(edge_complement.get());
 
-            node_b->suffix_edges.push_back(edge);
-            node_b->pair->prefix_edges.push_back(edge_complement);
-            node_a->prefix_edges.push_back(edge);
-            node_a->pair->suffix_edges.push_back(edge_complement);
+            edges_.push_back(std::move(edge));
+            edges_.push_back(std::move(edge_complement));
         }
+
+        it.reset();
     }
 
-    // log
-    fprintf(stderr, "  number of graph nodes = %zu\n", nodes_.size());
-    fprintf(stderr, "  number of graph edges = %zu\n", edges_.size());
-    timer.stop(); timer.print("  elapsed time =");
-    fprintf(stderr, "}\n");
+    fprintf(stderr, "[rala::Graph::construct] number of nodes in graph = %zu\n",
+        nodes_.size());
+    fprintf(stderr, "[rala::Graph::construct] number of edges in graph = %zu\n",
+        edges_.size());
+    timer.stop();
+    timer.print("[rala::Graph::construct] elapsed time =");
+
+    this->print_csv("assembly_grahp.csv");
 }
 
 void Graph::simplify() {
 
-    fprintf(stderr, "Graph::simplify {\n");
-    Timer timer; timer.start();
+    Timer timer;
+    timer.start();
 
-    this->remove_isolated_nodes();
-    uint32_t num_transitive_edges = this->remove_transitive_edges();
+    remove_isolated_nodes();
+    uint32_t num_transitive_edges = remove_transitive_edges();
 
     uint32_t num_tips = 0;
     uint32_t num_bubbles = 0;
 
     while (true) {
-        uint32_t num_changes = this->create_unitigs();
+        uint32_t num_changes = create_unitigs();
 
-        uint32_t num_changes_part = this->remove_tips();
+        uint32_t num_changes_part = remove_tips();
         num_tips += num_changes_part;
         num_changes += num_changes_part;
 
-        num_changes_part = this->remove_bubbles();
+        num_changes_part = remove_bubbles();
         num_bubbles += num_changes_part;
         num_changes += num_changes_part;
 
@@ -832,12 +832,13 @@ void Graph::simplify() {
         }
     }
 
-    uint32_t num_long_edges = this->remove_long_edges();
+    // TODO: try to avoid removal of long edges!
+    uint32_t num_long_edges = remove_long_edges();
 
     while (true) {
-        uint32_t num_changes = this->create_unitigs();
+        uint32_t num_changes = create_unitigs();
 
-        uint32_t num_changes_part = this->remove_tips();
+        uint32_t num_changes_part = remove_tips();
         num_tips += num_changes_part;
         num_changes += num_changes_part;
 
@@ -846,15 +847,19 @@ void Graph::simplify() {
         }
     }
 
-    fprintf(stderr, "  number of transitive edges = %u\n", num_transitive_edges);
-    fprintf(stderr, "  number of tips = %u\n", num_tips);
-    fprintf(stderr, "  number of bubbles = %u\n", num_bubbles);
-    fprintf(stderr, "  number of long edges = %u\n", num_long_edges);
-
-    timer.stop(); timer.print("  elapsed time =");
-    fprintf(stderr, "}\n");
+    fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
+        num_transitive_edges);
+    fprintf(stderr, "[rala::Graph::simplify] number of tips = %u\n",
+        num_tips);
+    fprintf(stderr, "[rala::Graph::simplify] number of bubbles = %u\n",
+        num_bubbles);
+    fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
+        num_long_edges);
+    timer.stop();
+    timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
+// TODO: reimplement remove_isolated_nodes
 uint32_t Graph::remove_isolated_nodes() {
 
     uint32_t num_isolated_nodes = 0;
@@ -863,8 +868,7 @@ uint32_t Graph::remove_isolated_nodes() {
         if (it == nullptr) {
             continue;
         }
-        if ((it->in_degree() == 0 && it->out_degree() == 0 && it->unitig_size < 6) ||
-            it->mark == true) {
+        if (it->indegree() == 0 && it->outdegree() == 0 && it->sequence_ids_.size() < 6) {
             it.reset();
             ++num_isolated_nodes;
         }
@@ -878,42 +882,41 @@ uint32_t Graph::remove_transitive_edges() {
     uint32_t num_transitive_edges = 0;
     std::vector<Edge*> candidate_edge(nodes_.size(), nullptr);
 
-    for (const auto& node_x: nodes_) {
-        if (node_x == nullptr) {
+    for (const auto& node_a: nodes_) {
+        if (node_a == nullptr) {
             continue;
         }
 
-        for (const auto& edge: node_x->suffix_edges) {
-            candidate_edge[edge->end_node->id] = edge;
+        for (const auto& edge_ab: node_a->suffix_edges_) {
+            candidate_edge[edge_ab->end_node_->id_] = edge_ab;
         }
 
-        for (const auto& edge_xy: node_x->suffix_edges) {
-            const auto& node_y = nodes_[edge_xy->end_node->id];
+        for (const auto& edge_ab: node_a->suffix_edges_) {
+            const auto& node_b = nodes_[edge_ab->end_node_->id_];
 
-            for (const auto& edge_yz: node_y->suffix_edges) {
-                uint32_t z = edge_yz->end_node->id;
+            for (const auto& edge_bc: node_b->suffix_edges_) {
+                uint64_t c = edge_bc->end_node_->id_;
 
-                if (candidate_edge[z] != nullptr &&
-                    candidate_edge[z]->mark == false) {
+                if (candidate_edge[c] != nullptr && !candidate_edge[c]->is_marked_) {
+                    if (comparable(edge_ab->length_ + edge_bc->length_,
+                        candidate_edge[c]->length_, 0.12)) {
 
-                    if (comparable(edge_xy->length + edge_yz->length,
-                        candidate_edge[z]->length, 0.12)) {
-
-                        candidate_edge[z]->mark = true;
-                        candidate_edge[z]->pair->mark = true;
-                        marked_edges_.insert(candidate_edge[z]->id);
-                        marked_edges_.insert(candidate_edge[z]->pair->id);
+                        candidate_edge[c]->is_marked_ = true;
+                        candidate_edge[c]->pair_->is_marked_ = true;
+                        marked_edges_.insert(candidate_edge[c]->id_);
+                        marked_edges_.insert(candidate_edge[c]->pair_->id_);
                         ++num_transitive_edges;
                     }
                 }
             }
         }
 
-        for (const auto& edge: node_x->suffix_edges) {
-            candidate_edge[edge->end_node->id] = nullptr;
+        for (const auto& edge_ab: node_a->suffix_edges_) {
+            candidate_edge[edge_ab->end_node_->id_] = nullptr;
         }
     }
-    remove_marked_edges();
+
+    remove_marked_objects();
 
     return num_transitive_edges;
 }
@@ -923,35 +926,35 @@ uint32_t Graph::remove_long_edges() {
     uint32_t num_long_edges = 0;
 
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->suffix_edges.size() < 2){
+        if (node == nullptr || node->suffix_edges_.size() < 2){
             continue;
         }
 
-        for (const auto& edge: node->suffix_edges) {
-            for (const auto& other_edge: node->suffix_edges) {
-                if (edge->id == other_edge->id ||
-                    edge->mark == true ||
-                    other_edge->mark == true) {
-
+        for (const auto& edge: node->suffix_edges_) {
+            for (const auto& other_edge: node->suffix_edges_) {
+                if (edge->id_ == other_edge->id_ || edge->is_marked_ ||
+                    other_edge->is_marked_) {
                     continue;
                 }
-                if (node->length() - other_edge->length <
-                    (node->length() - edge->length) * 0.9) {
+                if (node->length() - other_edge->length_ <
+                    (node->length() - edge->length_) * 0.9) {
 
-                    other_edge->mark = true;
-                    other_edge->pair->mark = true;
-                    marked_edges_.insert(other_edge->id);
-                    marked_edges_.insert(other_edge->pair->id);
+                    other_edge->is_marked_ = true;
+                    other_edge->pair_->is_marked_ = true;
+                    marked_edges_.insert(other_edge->id_);
+                    marked_edges_.insert(other_edge->pair_->id_);
                     ++num_long_edges;
                 }
             }
         }
     }
-    remove_marked_edges();
+
+    remove_marked_objects();
 
     return num_long_edges;
 }
 
+// TODO: reimplement remove_tips
 uint32_t Graph::remove_tips() {
 
     uint32_t num_tip_edges = 0;
@@ -963,24 +966,24 @@ uint32_t Graph::remove_tips() {
 
         uint32_t num_removed_edges = 0;
 
-        for (const auto& edge: node->suffix_edges) {
-            if (edge->end_node->in_degree() > 1) {
-                edge->mark = true;
-                edge->pair->mark = true;
-                marked_edges_.insert(edge->id);
-                marked_edges_.insert(edge->pair->id);
+        for (const auto& edge: node->suffix_edges_) {
+            if (edge->end_node_->indegree() > 1) {
+                edge->is_marked_ = true;
+                edge->pair_->is_marked_ = true;
+                marked_edges_.insert(edge->id_);
+                marked_edges_.insert(edge->pair_->id_);
                 ++num_removed_edges;
             }
         }
 
-        if (num_removed_edges == node->suffix_edges.size()) {
-            node->mark = true;
-            node->pair->mark = true;
+        if (num_removed_edges == node->suffix_edges_.size()) {
+            node->is_marked_ = true;
+            node->pair_->is_marked_ = true;
         }
 
         num_tip_edges += num_removed_edges;
 
-        remove_marked_edges();
+        remove_marked_objects();
     }
     remove_isolated_nodes();
 
@@ -990,31 +993,31 @@ uint32_t Graph::remove_tips() {
 uint32_t Graph::remove_bubbles() {
 
     std::vector<uint32_t> distance(nodes_.size(), 0);
-    std::vector<uint32_t> visited(nodes_.size(), 0);
-    uint32_t visited_length = 0;
-    std::vector<int32_t> predecessor(nodes_.size(), -1);
-    std::deque<uint32_t> queue;
+    std::vector<uint64_t> visited(nodes_.size(), 0);
+    uint64_t visited_length = 0;
+    std::vector<int64_t> predecessor(nodes_.size(), -1);
+    std::deque<uint64_t> node_queue;
 
-    auto extract_path = [&](std::vector<int32_t>& dst, int32_t source,
-        int32_t sink) -> void {
+    auto extract_path = [&](std::vector<uint64_t>& dst, uint64_t source,
+        uint64_t sink) -> void {
 
-        int32_t curr_id = sink;
+        uint64_t curr_id = sink;
         while (curr_id != source) {
             dst.push_back(curr_id);
             curr_id = predecessor[curr_id];
         }
-        dst.push_back(source);
+        dst.emplace_back(source);
         std::reverse(dst.begin(), dst.end());
     };
 
-    auto calculate_path_length = [&](const std::vector<int32_t>& path)
+    auto calculate_path_length = [&](const std::vector<uint64_t>& path)
         -> uint32_t {
 
         uint32_t path_length = nodes_[path.back()]->length();
-        for (uint32_t i = 0; i < path.size() - 1; ++i) {
-            for (const auto& edge: nodes_[path[i]]->suffix_edges) {
-                if (edge->end_node->id == (uint32_t) path[i + 1]) {
-                    path_length += edge->length;
+        for (uint64_t i = 0; i < path.size() - 1; ++i) {
+            for (const auto& edge: nodes_[path[i]]->suffix_edges_) {
+                if (edge->end_node_->id_ == (uint64_t) path[i + 1]) {
+                    path_length += edge->length_;
                     break;
                 }
             }
@@ -1022,17 +1025,21 @@ uint32_t Graph::remove_bubbles() {
         return path_length;
     };
 
-    auto is_valid_bubble = [&](const std::vector<int32_t>& path,
-        const std::vector<int32_t>& other_path) -> bool {
+    auto is_valid_bubble = [&](const std::vector<uint64_t>& path,
+        const std::vector<uint64_t>& other_path) -> bool {
 
-        std::set<int32_t> node_set;
-        for (const auto& id: path) node_set.insert(id);
-        for (const auto& id: other_path) node_set.insert(id);
+        std::unordered_set<uint64_t> node_set;
+        for (const auto& it: path) {
+            node_set.insert(it);
+        }
+        for (const auto& it: other_path) {
+            node_set.insert(it);
+        }
         if (path.size() + other_path.size() - 2 != node_set.size()) {
             return false;
         }
-        for (const auto& id: path) {
-            uint32_t pair_id = (id % 2 == 0) ? id + 1 : id - 1;
+        for (const auto& it: path) {
+            uint64_t pair_id = nodes_[it]->pair_->id_;
             if (node_set.count(pair_id) != 0) {
                 return false;
             }
@@ -1042,15 +1049,15 @@ uint32_t Graph::remove_bubbles() {
         if (std::min(path_length, other_path_length) <
             std::max(path_length, other_path_length) * 0.8) {
 
-            for (uint32_t i = 1; i < other_path.size() - 1; ++i) {
-                if (nodes_[other_path[i]]->in_degree() > 1 ||
-                    nodes_[other_path[i]]->out_degree() > 1) {
+            for (uint64_t i = 1; i < other_path.size() - 1; ++i) {
+                if (nodes_[other_path[i]]->indegree() > 1 ||
+                    nodes_[other_path[i]]->outdegree() > 1) {
                     return false;
                 }
             }
-            for (uint32_t i = 1; i < path.size() - 1; ++i) {
-                if (nodes_[path[i]]->in_degree() > 1 ||
-                    nodes_[path[i]]->out_degree() > 1) {
+            for (uint64_t i = 1; i < path.size() - 1; ++i) {
+                if (nodes_[path[i]]->indegree() > 1 ||
+                    nodes_[path[i]]->outdegree() > 1) {
                     return false;
                 }
             }
@@ -1060,37 +1067,39 @@ uint32_t Graph::remove_bubbles() {
 
     uint32_t num_bubbles_popped = 0;
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->out_degree() < 2) continue;
+        if (node == nullptr || node->outdegree() < 2) {
+            continue;
+        }
 
         bool found_sink = false;
-        int32_t sink = 0, sink_other_predecesor = 0;
-        int32_t source = node->id;
+        uint64_t sink = 0, sink_other_predecesor = 0;
+        uint64_t source = node->id_;
 
         // BFS
-        queue.push_back(source);
+        node_queue.push_back(source);
         visited[visited_length++] = source;
-        while (queue.size() != 0 && !found_sink) {
-            int32_t v = queue.front();
+        while (!node_queue.empty() && !found_sink) {
+            uint64_t v = node_queue.front();
             const auto& curr_node = nodes_[v];
 
-            queue.pop_front();
+            node_queue.pop_front();
 
-            for (const auto& edge: curr_node->suffix_edges) {
-                int32_t w = edge->end_node->id;
+            for (const auto& edge: curr_node->suffix_edges_) {
+                uint64_t w = edge->end_node_->id_;
 
                 if (w == source) {
                     // Cycle
                     continue;
                 }
 
-                if (distance[v] + edge->length > 5000000) {
+                if (distance[v] + edge->length_ > 5000000) {
                     // Out of reach
                     continue;
                 }
 
-                distance[w] = distance[v] + edge->length;
+                distance[w] = distance[v] + edge->length_;
                 visited[visited_length++] = w;
-                queue.push_back(w);
+                node_queue.push_back(w);
 
                 if (predecessor[w] != -1) {
                     sink = w;
@@ -1104,23 +1113,24 @@ uint32_t Graph::remove_bubbles() {
         }
 
         if (found_sink) {
-            std::vector<int32_t> path, other_path;
+            std::vector<uint64_t> path;
             extract_path(path, source, sink);
-            other_path.push_back(sink);
+
+            std::vector<uint64_t> other_path(1, sink);
             extract_path(other_path, source, sink_other_predecesor);
 
             if (is_valid_bubble(path, other_path)) {
-                uint32_t path_num_reads = 0;
+                uint64_t path_num_reads = 0;
                 for (const auto& it: path) {
-                    path_num_reads += nodes_[it]->unitig_size;
+                    path_num_reads += nodes_[it]->sequence_ids_.size();
                 }
 
-                uint32_t other_path_num_reads = 0;
+                uint64_t other_path_num_reads = 0;
                 for (const auto& it: other_path) {
-                    other_path_num_reads += nodes_[it]->unitig_size;
+                    other_path_num_reads += nodes_[it]->sequence_ids_.size();
                 }
 
-                std::vector<uint32_t> edges_for_removal;
+                std::vector<uint64_t> edges_for_removal;
                 if (path_num_reads > other_path_num_reads) {
                     find_removable_edges(edges_for_removal, other_path);
                 } else {
@@ -1128,20 +1138,20 @@ uint32_t Graph::remove_bubbles() {
                 }
 
                 for (const auto& edge_id: edges_for_removal) {
-                    edges_[edge_id]->mark = true;
-                    edges_[edge_id]->pair->mark = true;
+                    edges_[edge_id]->is_marked_ = true;
+                    edges_[edge_id]->pair_->is_marked_ = true;
                     marked_edges_.insert(edge_id);
-                    marked_edges_.insert(edges_[edge_id]->pair->id);
+                    marked_edges_.insert(edges_[edge_id]->pair_->id_);
                 }
                 if (!edges_for_removal.empty()) {
-                    remove_marked_edges();
+                    remove_marked_objects();
                     ++num_bubbles_popped;
                 }
             }
         }
 
-        queue.clear();
-        for (uint32_t i = 0; i < visited_length; ++i) {
+        node_queue.clear();
+        for (uint64_t i = 0; i < visited_length; ++i) {
             distance[visited[i]] = 0;
             predecessor[visited[i]] = -1;
         }
@@ -1153,199 +1163,212 @@ uint32_t Graph::remove_bubbles() {
     return num_bubbles_popped;
 }
 
-uint32_t Graph::create_unitigs() {
+uint64_t Graph::find_edge(uint64_t src, uint64_t dst) {
 
-    uint32_t node_id = nodes_.size();
-    std::vector<bool> visited(nodes_.size(), false);
-    std::vector<std::unique_ptr<Node>> new_nodes;
-
-    uint32_t num_unitigs_created = 0;
-
-    for (const auto& node: nodes_) {
-        if (node == nullptr || visited[node->id] || node->is_junction()) {
-            continue;
-        }
-
-        bool is_circular = false;
-        auto first_node = node.get();
-        while (!first_node->is_junction()) {
-            visited[first_node->id] = true;
-            visited[first_node->pair->id] = true;
-            if (first_node->in_degree() == 0 ||
-                first_node->prefix_edges.front()->begin_node->is_junction()) {
-                break;
-            }
-            first_node = first_node->prefix_edges.front()->begin_node;
-            if (first_node->id == node->id) {
-                is_circular = true;
-                break;
-            }
-        }
-
-        auto last_node = node.get();
-        while (!last_node->is_junction()) {
-            visited[last_node->id] = true;
-            visited[last_node->pair->id] = true;
-            if (last_node->out_degree() == 0 ||
-                last_node->suffix_edges.front()->end_node->is_junction()) {
-                break;
-            }
-            last_node = last_node->suffix_edges.front()->end_node;
-            if (last_node->id == node->id) {
-                is_circular = true;
-                break;
-            }
-        }
-
-        Node* unitig = nullptr;
-        Node* unitig_complement = nullptr;
-
-        if (is_circular) {
-            unitig = new Node(node_id++, first_node, marked_edges_);
-            unitig_complement = new Node(node_id++, first_node->pair,
-                marked_edges_);
-        } else if (first_node->id != last_node->id) {
-            unitig = new Node(node_id++, first_node, last_node, marked_edges_);
-            unitig_complement = new Node(node_id++, last_node->pair,
-                first_node->pair, marked_edges_);
-        }
-
-        if (unitig != nullptr && unitig_complement != nullptr) {
-            unitig->pair = unitig_complement;
-            unitig_complement->pair = unitig;
-
-            new_nodes.push_back(std::unique_ptr<Node>(unitig));
-            new_nodes.push_back(std::unique_ptr<Node>(unitig_complement));
-
-            ++num_unitigs_created;
+    uint64_t edge_id = 0;
+    bool found_edge = false;
+    for (const auto& edge: nodes_[src]->suffix_edges_) {
+        if (edge->end_node_->id_ == dst) {
+            edge_id = edge->id_;
+            found_edge = true;
+            break;
         }
     }
 
-    for (auto& node: new_nodes) {
-        nodes_.push_back(std::move(node));
+    if (!found_edge) {
+        fprintf(stderr, "[rala::Graph::find_edge] error: "
+            "missing edge between nodes %lu and %lu\n", src, dst);
+        exit(1);
     }
 
-    remove_marked_edges();
-    remove_isolated_nodes();
-
-    return num_unitigs_created;
+    return edge_id;
 }
 
-void Graph::get_contigs(std::vector<std::unique_ptr<Read>>& dst) const {
-
-    fprintf(stderr, "Graph::get_contigs {\n");
-
-    uint32_t contig_id = 0;
-    for (const auto& node: nodes_) {
-        if (node == nullptr || node->id % 2 == 0 || node->unitig_size < 6 ||
-            node->length() < 10000) {
-            continue;
-        }
-        fprintf(stderr, "  contig %d: length = %lu, num reads = %u (%u -> %u)\n",
-            contig_id, node->sequence.size(), node->unitig_size,
-            node->read_ids.front(), node->read_ids.back());
-
-        std::string name = ">Contig_" + std::to_string(contig_id) + "_(Utg=" +
-            std::to_string(node->unitig_size) + ":Len=" +
-            std::to_string(node->sequence.size()) + ")";
-
-        dst.emplace_back(createRead(contig_id, name.c_str(), name.size(),
-            node->sequence.c_str(), node->sequence.size()));
-        ++contig_id;
-    }
-
-    fprintf(stderr, "}\n");
-}
-
-int32_t Graph::find_edge(uint32_t src, uint32_t dst) {
-    for (const auto& edge: nodes_[src]->suffix_edges) {
-        if (edge->end_node->id == dst) {
-            return edge->id;
-        }
-    }
-    return -1;
-}
-
-void Graph::find_removable_edges(std::vector<uint32_t>& dst,
-    const std::vector<int32_t>& path) {
+void Graph::find_removable_edges(std::vector<uint64_t>& dst,
+    const std::vector<uint64_t>& path) {
 
     // find first node with multiple in edges
-    int32_t pref = -1;
-    for (uint32_t i = 1; i < path.size() - 1; ++i) {
-        if (nodes_[path[i]]->in_degree() > 1) {
+    int64_t pref = -1;
+    for (uint64_t i = 1; i < path.size() - 1; ++i) {
+        if (nodes_[path[i]]->indegree() > 1) {
             pref = i;
             break;
         }
     }
     // find last node with multiple out edges
-    int32_t suff = -1;
-    for (uint32_t i = 1; i < path.size() - 1; ++i) {
-        if (nodes_[path[i]]->out_degree() > 1) {
+    int64_t suff = -1;
+    for (uint64_t i = 1; i < path.size() - 1; ++i) {
+        if (nodes_[path[i]]->outdegree() > 1) {
             suff = i;
         }
     }
 
     if (pref == -1 && suff == -1) {
         // remove whole path
-        for (uint32_t i = 0; i < path.size() - 1; ++i) {
+        for (uint64_t i = 0; i < path.size() - 1; ++i) {
             dst.push_back(find_edge(path[i], path[i + 1]));
         }
         return;
     }
 
-    if (pref != -1 && nodes_[path[pref]]->out_degree() > 1) {
+    if (pref != -1 && nodes_[path[pref]]->outdegree() > 1) {
         return;
     }
-    if (suff != -1 && nodes_[path[suff]]->in_degree() > 1) {
+    if (suff != -1 && nodes_[path[suff]]->indegree() > 1) {
         return;
     }
 
     if (pref == -1) {
         // remove everything after last suff node
-        for (uint32_t i = suff; i < path.size() - 1; ++i) {
+        for (uint64_t i = suff; i < path.size() - 1; ++i) {
             dst.push_back(find_edge(path[i], path[i + 1]));
         }
     } else if (suff == -1) {
         // remove everything before first pref node
-        for (int32_t i = 0; i < pref; ++i) {
+        for (int64_t i = 0; i < pref; ++i) {
             dst.push_back(find_edge(path[i], path[i + 1]));
         }
     } else if (suff < pref) {
         // remove everything between last suff and first pref node
-        for (int32_t i = suff; i < pref; ++i) {
+        for (int64_t i = suff; i < pref; ++i) {
             dst.push_back(find_edge(path[i], path[i + 1]));
         }
     }
 }
 
-void Graph::remove_marked_edges() {
+uint32_t Graph::create_unitigs() {
 
-    auto delete_edges = [&](std::list<Edge*>& edges) -> void {
-        auto edge = edges.begin();
-        while (edge != edges.end()) {
-            if ((*edge)->mark == true) {
-                edge = edges.erase(edge);
-            } else {
-                ++edge;
+    std::vector<bool> is_visited(nodes_.size(), false);
+
+    uint64_t node_id = nodes_.size();
+    std::vector<std::unique_ptr<Node>> unitigs;
+
+    uint32_t num_unitigs_created = 0;
+
+    for (const auto& it: nodes_) {
+        if (it == nullptr || is_visited[it->id_] || it->is_junction()) {
+            continue;
+        }
+
+        bool is_circular = false;
+        auto begin_node = it.get();
+        while (!begin_node->is_junction()) {
+            is_visited[begin_node->id_] = true;
+            is_visited[begin_node->pair_->id_] = true;
+            if (begin_node->indegree() == 0 ||
+                begin_node->prefix_edges_[0]->begin_node_->is_junction()) {
+                break;
+            }
+            begin_node = begin_node->prefix_edges_[0]->begin_node_;
+            if (begin_node->id_ == it->id_) {
+                is_circular = true;
+                break;
             }
         }
-    };
 
-    std::unordered_set<uint32_t> marked_nodes;
-    for (const auto& it: marked_edges_) {
-        marked_nodes.insert(edges_[it]->begin_node->id);
-        marked_nodes.insert(edges_[it]->end_node->id);
+        auto end_node = it.get();
+        while (!end_node->is_junction()) {
+            is_visited[end_node->id_] = true;
+            is_visited[end_node->pair_->id_] = true;
+            if (end_node->outdegree() == 0 ||
+                end_node->suffix_edges_[0]->end_node_->is_junction()) {
+                break;
+            }
+            end_node = end_node->suffix_edges_[0]->end_node_;
+            if (end_node->id_ == it->id_) {
+                is_circular = true;
+                break;
+            }
+        }
+
+        if (!is_circular && begin_node == end_node) {
+            continue;
+        }
+
+        std::unique_ptr<Node> unitig(new Node(node_id++, begin_node, end_node,
+            marked_nodes_, marked_edges_));
+        std::unique_ptr<Node> unitig_complement(new Node(node_id++,
+            end_node->pair_, begin_node->pair_, marked_nodes_, marked_edges_));
+
+        unitig->pair_ = unitig_complement.get();
+        unitig_complement->pair_ = unitig.get();
+
+        unitigs.emplace_back(std::move(unitig));
+        unitigs.emplace_back(std::move(unitig_complement));
+
+        ++num_unitigs_created;
     }
 
-    for (const auto& it: marked_nodes) {
-        delete_edges(nodes_[it]->prefix_edges);
-        delete_edges(nodes_[it]->suffix_edges);
+    for (uint64_t i = 0; i < unitigs.size(); ++i) {
+        nodes_.emplace_back(std::move(unitigs[i]));
+    }
+
+    remove_marked_objects();
+
+    return num_unitigs_created;
+}
+
+void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const {
+
+    uint32_t contig_id = 0;
+    std::vector<uint32_t> contig_length;
+    for (const auto& node: nodes_) {
+        if (node == nullptr || node->id_ % 2 == 0 || node->sequence_ids_.size() < 6 ||
+            node->length() < 10000) {
+            continue;
+        }
+        contig_length.emplace_back(node->data_.size());
+
+        std::string name = ">Ctg" + std::to_string(contig_id);
+        name += " RC:i:" + std::to_string(node->sequence_ids_.size());
+        name += " LN:i:" + std::to_string(node->data_.size());
+
+        dst.emplace_back(createSequence(name, node->data_));
+        ++contig_id;
+    }
+
+    fprintf(stderr, "[rala::Graph::extract_contigs] number of contigs = %zu\n",
+        contig_length.size());
+
+    if (contig_length.empty()) {
+        return;
+    }
+
+    std::sort(contig_length.begin(), contig_length.end());
+
+    fprintf(stderr, "[rala::Graph::extract_contigs] shortest contig length = %u\n",
+        contig_length.front());
+    fprintf(stderr, "[rala::Graph::extract_contigs] median contig length = %u\n",
+        contig_length[contig_length.size() / 2]);
+    fprintf(stderr, "[rala::Graph::extract_contigs] longest contig length = %u\n",
+        contig_length.back());
+}
+
+void Graph::remove_marked_objects() {
+
+    auto delete_edges = [&](std::vector<Edge*>& edges) -> void {
+        for (uint32_t i = 0; i < edges.size(); ++i) {
+            if (edges[i]->is_marked_) {
+                edges[i] = nullptr;
+            }
+        }
+        shrinkToFit(edges, 0);
+    };
+
+    for (const auto& it: marked_edges_) {
+        delete_edges(edges_[it]->begin_node_->suffix_edges_);
+        delete_edges(edges_[it]->end_node_->prefix_edges_);
     }
 
     for (const auto& it: marked_edges_) {
         edges_[it].reset();
     }
     marked_edges_.clear();
+
+    for (const auto& it: marked_nodes_) {
+        nodes_[it].reset();
+    }
+    marked_nodes_.clear();
 }
 
 void Graph::print_csv(std::string path) const {
@@ -1353,23 +1376,22 @@ void Graph::print_csv(std::string path) const {
     auto graph_file = fopen(path.c_str(), "w");
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->id % 2 == 0) {
+        if (it == nullptr || !it->is_rc()) {
             continue;
         }
-        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%u U:%u,0,-\n",
-            it->id, it->length(), it->read_id, it->unitig_size, it->pair->id,
-            it->pair->length(), it->pair->read_id, it->pair->unitig_size);
+        fprintf(graph_file, "%lu LN:i:%u RC:i:%lu,%lu LN:i:%u RC:i:%lu,0,-\n",
+            it->id_, it->length(), it->sequence_ids_.size(),
+            it->pair_->id_, it->pair_->length(), it->pair_->sequence_ids_.size());
     }
 
     for (const auto& it: edges_) {
         if (it == nullptr) {
             continue;
         }
-        fprintf(graph_file, "%u L:%u R:%d U:%d,%u L:%u R:%u U:%u,1,%u %u\n",
-            it->begin_node->id, it->begin_node->length(),
-            it->begin_node->read_id, it->begin_node->unitig_size,
-            it->end_node->id, it->end_node->length(), it->end_node->read_id,
-            it->end_node->unitig_size, it->id, it->length);
+        fprintf(graph_file, "%lu LN:i:%u RC:i:%lu,%lu LN:i:%u RC:i:%lu,1,%lu %u\n",
+            it->begin_node_->id_, it->begin_node_->length(), it->begin_node_->sequence_ids_.size(),
+            it->end_node_->id_, it->end_node_->length(), it->end_node_->sequence_ids_.size(),
+            it->id_, it->length_);
     }
 
     fclose(graph_file);
@@ -1379,143 +1401,47 @@ void Graph::print_gfa(std::string path) const {
 
     auto graph_file = fopen(path.c_str(), "w");
 
-    std::unordered_map<uint32_t, std::string> node_id_to_unitig_name;
+    std::unordered_map<uint64_t, std::string> node_id_to_unitig_name;
     uint32_t unitig_id = 0;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->id % 2 == 1) {
+        if (it == nullptr || it->id_ % 2 == 1) {
             continue;
         }
-        if (it->read_name.empty()) {
-            auto unitig_name = "Utg" + std::to_string(unitig_id++);
-            node_id_to_unitig_name[it->id] = unitig_name;
-            node_id_to_unitig_name[it->pair->id] = unitig_name;
+        if (it->name_.empty()) {
+            std::string unitig_name = "Utg" + std::to_string(unitig_id++);
+            node_id_to_unitig_name[it->id_] = unitig_name;
+            node_id_to_unitig_name[it->pair_->id_] = unitig_name;
         }
-        fprintf(graph_file, "S\t%s\t%s\tLN:i:%zu\tRC:i:%u\n",
-            it->read_name.empty() ? node_id_to_unitig_name[it->id].c_str() : it->read_name.c_str(),
-            it->sequence.c_str(), it->sequence.size(), it->unitig_size);
+
+        const auto& node_name = !it->name_.empty() ? it->name_ :
+            node_id_to_unitig_name[it->id_];
+
+        fprintf(graph_file, "S\t%s\t%s\tLN:i:%zu\tRC:i:%lu\n",
+            node_name.c_str(), it->data_.c_str(), it->data_.size(),
+            it->sequence_ids_.size());
     }
 
     for (const auto& it: edges_) {
         if (it == nullptr) {
             continue;
         }
+
+        const auto& begin_node_name = nodes_[it->begin_node_->id_]->name_.empty() ?
+            nodes_[it->begin_node_->id_]->name_ :
+            node_id_to_unitig_name[it->begin_node_->id_];
+
+        const auto& end_node_name = !nodes_[it->end_node_->id_]->name_.empty() ?
+            nodes_[it->end_node_->id_]->name_ :
+            node_id_to_unitig_name[it->end_node_->id_];
+
         fprintf(graph_file, "L\t%s\t%c\t%s\t%c\t%zuM\n",
-            nodes_[it->begin_node->id]->read_name.empty() ?
-            node_id_to_unitig_name[it->begin_node->id].c_str() : nodes_[it->begin_node->id]->read_name.c_str(),
-            it->begin_node->id % 2 == 0 ? '+' : '-',
-            nodes_[it->end_node->id]->read_name.empty() ?
-            node_id_to_unitig_name[it->end_node->id].c_str() : nodes_[it->end_node->id]->read_name.c_str(),
-            it->end_node->id % 2 == 0 ? '+' : '-',
-            it->begin_node->sequence.size() - it->length);
+            begin_node_name.c_str(), it->begin_node_->is_rc() ? '-' : '+',
+            end_node_name.c_str(), it->end_node_->is_rc() ? '-' : '+',
+            it->begin_node_->data_.size() - it->length_);
     }
 
     fclose(graph_file);
-}
-
-void Graph::print_knots() const {
-
-    std::vector<bool> visited(edges_.size(), false);
-
-    for (const auto& node: nodes_) {
-        if (node == nullptr ||
-            (node->suffix_edges.size() < 2 && node->prefix_edges.size() < 2)) {
-            continue;
-        }
-        uint32_t read_id = node->read_ids.front();
-        if (read_infos_[read_id] == nullptr) {
-            continue;
-        }
-
-        std::vector<uint16_t> coverage_graph(read_infos_[read_id]->coverage_graph());
-        uint32_t begin = read_infos_[read_id]->begin();
-        uint32_t end = read_infos_[read_id]->end();
-        if (node->rc) {
-            std::reverse(coverage_graph.begin(), coverage_graph.end());
-            uint32_t tmp = begin;
-            begin = coverage_graph.size() - end;
-            end = coverage_graph.size() - tmp;
-        }
-
-        for (const auto& edge: node->suffix_edges) {
-            if (visited[edge->id]) {
-                continue;
-            }
-            visited[edge->id] = true;
-            visited[edge->pair->id] = true;
-
-            uint32_t other_read_id = edge->end_node->read_ids.front();
-            if (read_infos_[other_read_id] == nullptr) {
-                continue;
-            }
-
-            std::vector<uint16_t> other_coverage_graph(
-                read_infos_[other_read_id]->coverage_graph());
-            uint32_t other_begin = read_infos_[other_read_id]->begin();
-            uint32_t other_end = read_infos_[other_read_id]->end();
-            if (edge->end_node->rc) {
-                std::reverse(other_coverage_graph.begin(), other_coverage_graph.end());
-                uint32_t tmp = other_begin;
-                other_begin = other_coverage_graph.size() - other_end;
-                other_end = other_coverage_graph.size() - tmp;
-            }
-
-            std::ofstream out("graphs/e" + std::to_string(edge->id));
-            out << "x " << read_id << " " << other_read_id << " median"
-                << std::endl;
-            for (uint32_t i = 0; i < begin + edge->length + (other_end - other_begin); ++i) {
-                uint32_t g = (i < coverage_graph.size() ? coverage_graph[i] : 0);
-                uint32_t other_g = (i < begin + edge->length ? 0 :
-                    other_coverage_graph[i - (edge->length + begin) + other_begin]);
-                out << i << " " << g << " " << other_g << " " << coverage_median_
-                    << std::endl;
-            }
-            out.close();
-        }
-    }
-}
-
-void Graph::remove_selected_nodes_and_edges() {
-
-    uint32_t num_chimeras = 0;
-    std::set<uint32_t> selected_nodes = {};
-    for (const auto& node: nodes_) {
-        if (node == nullptr) continue;
-        if (selected_nodes.count(node->id) != 0) {
-            node->mark = true;
-            node->pair->mark = true;
-            for (const auto& edge: node->suffix_edges) {
-                edge->mark = true;
-                edge->pair->mark = true;
-                marked_edges_.insert(edge->id);
-                marked_edges_.insert(edge->pair->id);
-            }
-            for (const auto& edge: node->prefix_edges) {
-                edge->mark = true;
-                edge->pair->mark = true;
-                marked_edges_.insert(edge->id);
-                marked_edges_.insert(edge->pair->id);
-            }
-
-            ++num_chimeras;
-        }
-    }
-
-    fprintf(stderr, "Num selected nodes = %u\n", num_chimeras);
-
-    std::set<uint32_t> selected_edges = {};
-    for (const auto& edge: edges_) {
-        if (edge == nullptr) continue;
-        if (selected_edges.count(edge->id) != 0) {
-            edge->mark = true;
-            edge->pair->mark = true;
-            marked_edges_.insert(edge->id);
-            marked_edges_.insert(edge->pair->id);
-        }
-    }
-
-    remove_marked_edges();
-    remove_isolated_nodes();
 }
 
 }

@@ -12,10 +12,11 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace bioparser {
     template<class T>
-    class Reader;
+    class Parser;
 }
 
 namespace thread_pool {
@@ -24,12 +25,12 @@ namespace thread_pool {
 
 namespace rala {
 
-class Read;
-class ReadInfo;
+class Sequence;
+class Pile;
 class Overlap;
 
 class Graph;
-std::unique_ptr<Graph> createGraph(const std::string& reads_path,
+std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
     const std::string& overlaps_path, uint32_t num_threads);
 
 class Graph {
@@ -37,8 +38,9 @@ public:
     ~Graph();
 
     /*!
-     * @brief Constructs the assembly graph by removing contained reads and
-     * transitive overlaps
+     * @brief Constructs the assembly graph by removing contained sequences and
+     * transitive overlaps (removes chimeric and repetitive sequences before
+     * construction if flag is set)
      */
     void construct(bool preprocess = true);
 
@@ -75,14 +77,14 @@ public:
     uint32_t remove_bubbles();
 
     /*!
-     * @brief Creates unitigs by merging chains of overlapping reads
+     * @brief Creates unitigs by merging chains of overlapping sequences
      */
     uint32_t create_unitigs();
 
     /*!
      * @brief Stores all contigs into dst
      */
-    void get_contigs(std::vector<std::unique_ptr<Read>>& dst) const;
+    void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const;
 
     /*!
      * @brief Prints assembly graph in csv format
@@ -98,59 +100,58 @@ public:
      * @brief Prints all unresolved graph junctions into graphs/ folder if
      * such exists
      */
-    void print_knots() const;
+    void print_knots() const; // TODO: reimplement
 
-    /*!
-     * @brief For testing purposes
-     */
-    void remove_selected_nodes_and_edges();
-
-    friend std::unique_ptr<Graph> createGraph(const std::string& reads_path,
+    friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);
 private:
-    Graph(const std::string& reads_path, const std::string& overlaps_path,
+    Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
+        std::unique_ptr<bioparser::Parser<Overlap>> oparser,
         uint32_t num_threads);
     Graph(const Graph&) = delete;
     const Graph& operator=(const Graph&) = delete;
 
     /*!
-     * @brief Initializes all structures by reading the overlaps and trimming
-     * reads
+     * @brief Initializes all structures and trims sequences
      */
     void initialize();
 
     /*!
-     * @brief Removes chimeric reads and those that do not bridge repetitive
-     * genomic regions
+     * @brief Splits chimeric sequences and removes overlaps between sequences
+     * that do not bridge repetitive genomic regions
      */
     void preprocess();
 
-    int32_t find_edge(uint32_t src, uint32_t dst);
+    uint64_t find_edge(uint64_t src, uint64_t dst);
 
     /*!
-     * @brief Finds edges in path which if removed do not affect the
-     * connectivity of the rest of the graph
+     * @brief Finds edges in path which do not affect the connectivity of the
+     * rest of the graph if removed
      */
-    void find_removable_edges(std::vector<uint32_t>& dst,
-        const std::vector<int32_t>& path);
+    void find_removable_edges(std::vector<uint64_t>& dst,
+        const std::vector<uint64_t>& path);
 
-    void remove_marked_edges();
+    void remove_marked_objects();
 
     class Node;
     class Edge;
 
-    std::unique_ptr<bioparser::Reader<Read>> rreader_;
-    std::vector<std::unique_ptr<ReadInfo>> read_infos_;
+    std::unique_ptr<bioparser::Parser<Sequence>> sparser_;
+    std::unordered_map<std::string, uint64_t> name_to_id_;
+
+    std::vector<std::unique_ptr<Pile>> piles_;
     uint32_t coverage_median_;
 
-    std::unique_ptr<bioparser::Reader<Overlap>> oreader_;
-    std::vector<bool> overlap_infos_;
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser_;
+    std::vector<bool> is_valid_overlap_;
 
     std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
 
-    std::vector<std::shared_ptr<Node>> nodes_;
-    std::vector<std::shared_ptr<Edge>> edges_;
-    std::unordered_set<uint32_t> marked_edges_;
+    std::vector<std::unique_ptr<Node>> nodes_;
+    std::unordered_set<uint64_t> marked_nodes_;
+
+    std::vector<std::unique_ptr<Edge>> edges_;
+    std::unordered_set<uint64_t> marked_edges_;
 };
 
 }

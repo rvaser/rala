@@ -8,16 +8,19 @@
 
 #include <stdint.h>
 #include <memory>
+#include <unordered_map>
 
 namespace bioparser {
     template<class T>
-    class MhapReader;
+    class MhapParser;
 
     template<class T>
-    class PafReader;
+    class PafParser;
 }
 
 namespace rala {
+
+class Pile;
 
 enum class OverlapType {
     kX, // bad overlap
@@ -30,10 +33,6 @@ enum class OverlapType {
 class Overlap {
 public:
     ~Overlap();
-
-    uint64_t id() const {
-        return id_;
-    }
 
     uint32_t a_id() const {
         return a_id_;
@@ -75,19 +74,20 @@ public:
         return orientation_;
     }
 
+    bool transmute(const std::vector<std::unique_ptr<Pile>>& piles,
+        const std::unordered_map<std::string, uint64_t>& name_to_id);
+
+    bool trim(const std::vector<std::unique_ptr<Pile>>& piles);
+
     OverlapType type() const;
 
-    bool update(uint32_t a_trimmed_begin, uint32_t a_trimmed_end,
-        uint32_t b_trimmed_begin, uint32_t b_trimmed_end);
-
-    friend bioparser::MhapReader<Overlap>;
-    friend bioparser::PafReader<Overlap>;
+    friend bioparser::MhapParser<Overlap>;
+    friend bioparser::PafParser<Overlap>;
 private:
-    Overlap(uint64_t id, uint32_t a_id, uint32_t b_id, double error,
-        uint32_t minmers, uint32_t a_rc, uint32_t a_begin, uint32_t a_end,
-        uint32_t a_length, uint32_t b_rc, uint32_t b_begin, uint32_t b_end,
-        uint32_t b_length);
-    Overlap(uint64_t id, const char* a_name, uint32_t a_name_length,
+    Overlap(uint64_t a_id, uint64_t b_id, double error, uint32_t minmers,
+        uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
+        uint32_t b_rc, uint32_t b_begin, uint32_t b_end, uint32_t b_length);
+    Overlap(const char* a_name, uint32_t a_name_length,
         uint32_t a_length, uint32_t a_begin, uint32_t a_end,
         char orientation, const char* b_name, uint32_t b_name_length,
         uint32_t b_length, uint32_t b_begin, uint32_t b_end,
@@ -95,17 +95,19 @@ private:
     Overlap(const Overlap&) = delete;
     const Overlap& operator=(const Overlap&) = delete;
 
-    uint64_t id_;
-    uint32_t a_id_;
+    std::string a_name_;
+    uint64_t a_id_;
     uint32_t a_begin_;
     uint32_t a_end_;
     uint32_t a_length_;
-    uint32_t b_id_;
+    std::string b_name_;
+    uint64_t b_id_;
     uint32_t b_begin_;
     uint32_t b_end_;
     uint32_t b_length_;
     uint32_t length_;
     uint32_t orientation_;
+    bool is_transmuted_;
 };
 
 }
