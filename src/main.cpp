@@ -57,9 +57,6 @@ int main(int argc, char** argv) {
     std::vector<std::unique_ptr<rala::Sequence>> contigs;
     graph->extract_contigs(contigs);
 
-    graph->print_csv("assembly_graph.csv");
-    graph->print_gfa("assembly_graph.gfa");
-
     for (const auto& it: contigs) {
         fprintf(stdout, "%s\n%s\n", it->name().c_str(), it->data().c_str());
     }

@@ -58,7 +58,7 @@ Usage of rala is as following:
             --version
                 prints the version number
             -h, --help
-                prints out the help
+                prints the usage
 
 ## Contact information
 
