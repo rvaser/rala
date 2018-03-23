@@ -417,7 +417,7 @@ void Graph::initialize() {
     }
 
     if (num_prefiltered_sequences == num_sequences) {
-        fprintf(stderr, "[rala::Graph::initialize] error: empty sequence set!\n");
+        fprintf(stderr, "[rala::Graph::initialize] error: filtered all sequences!\n");
         exit(1);
     }
 
@@ -801,8 +801,6 @@ void Graph::construct(bool preprocess) {
         edges_.size());
     timer.stop();
     timer.print("[rala::Graph::construct] elapsed time =");
-
-    this->print_csv("assembly_grahp.csv");
 }
 
 void Graph::simplify() {
