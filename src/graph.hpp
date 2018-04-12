@@ -97,10 +97,10 @@ public:
     void print_gfa(std::string path) const;
 
     /*!
-     * @brief Prints all unresolved graph junctions into graphs/ folder if
-     * such exists
+     * @brief Prints all unresolved graph junctions in JSON format (plottable
+     * with misc/plotter.py)
      */
-    void print_knots() const; // TODO: reimplement
+    void print_json(std::string path) const;
 
     friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);

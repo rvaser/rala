@@ -99,9 +99,9 @@ public:
     bool is_valid_overlap(uint32_t begin, uint32_t end) const;
 
     /*!
-     * @brief Prints data_ in csv format to path
+     * @brief Serializes objects into JSON format
      */
-    void print_csv(std::string path, uint16_t dataset_median = 0) const;
+    std::string to_json() const;
 
     friend std::unique_ptr<Pile> createPile(uint64_t id, uint32_t sequence_length);
 private:

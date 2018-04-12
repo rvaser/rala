@@ -96,6 +96,8 @@ public:
     std::vector<Edge*> prefix_edges_;
     std::vector<Edge*> suffix_edges_;
     std::vector<uint64_t> sequence_ids_;
+    bool is_first_rc_;
+    bool is_last_rc_;
     bool is_marked_;
     Node* pair_;
 };
@@ -124,7 +126,8 @@ public:
 Graph::Node::Node(uint64_t id, uint64_t sequence_id, const std::string& name,
     const std::string& data)
         : id_(id), name_(name), data_(data), prefix_edges_(), suffix_edges_(),
-        sequence_ids_(1, sequence_id), is_marked_(false), pair_() {
+        sequence_ids_(1, sequence_id), is_first_rc_(id % 2), is_last_rc_(id % 2),
+        is_marked_(false), pair_() {
 }
 
 Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
@@ -149,6 +152,8 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
         }
     }
 
+    is_first_rc_ = begin_node->is_first_rc_;
+
     uint32_t edge_length = 0;
     auto node = begin_node;
     while (true) {
@@ -158,6 +163,8 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
         sequence_ids_.insert(sequence_ids_.end(),
             node->sequence_ids_.begin(),
             node->sequence_ids_.end());
+        is_last_rc_ = node->is_last_rc_;
+
         edge_length += edge->length_;
 
         edge->is_marked_ = true;
@@ -176,6 +183,7 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
         sequence_ids_.insert(sequence_ids_.end(),
             end_node->sequence_ids_.begin(),
             end_node->sequence_ids_.end());
+        is_last_rc_ = end_node->is_last_rc_;
 
         end_node->is_marked_ = true;
         marked_nodes.emplace(end_node->id_);
@@ -1440,6 +1448,79 @@ void Graph::print_gfa(std::string path) const {
     }
 
     fclose(graph_file);
+}
+
+void Graph::print_json(std::string path) const {
+
+    std::ofstream os(path);
+    os << "{\"knots\":{";
+    bool is_first = true;
+
+    std::unordered_set<uint64_t> sequence_ids;
+    for (const auto& it: nodes_) {
+        if (it == nullptr || it->is_rc() || (it->outdegree() < 2 && it->indegree() < 2)) {
+            continue;
+        }
+
+        if (!is_first) {
+            os << ",";
+        }
+        is_first = false;
+        os << "\"" << it->sequence_ids_.front() << "\":{";
+
+        os << "\"p\":[";
+
+        sequence_ids.emplace(it->sequence_ids_.front());
+        for (uint32_t i = 0; i < it->prefix_edges_.size(); ++i) {
+            auto other = it->prefix_edges_[i]->begin_node_;
+            sequence_ids.emplace(other->sequence_ids_.back());
+
+            os << "[\"" << other->sequence_ids_.back() << "\",\"" <<
+                other->id_ << "\"," << other->is_last_rc_ << "," <<
+                other->length() - it->prefix_edges_[i]->length_ << "]";
+            if (i < it->prefix_edges_.size() - 1) {
+                os << ",";
+            }
+        }
+
+        os << "],\"s\":[";
+
+        for (uint32_t i = 0; i < it->suffix_edges_.size(); ++i) {
+            auto other = it->suffix_edges_[i]->end_node_;
+            sequence_ids.emplace(other->sequence_ids_.front());
+
+            os << "[\"" << other->sequence_ids_.front() << "\",\"" <<
+                other->id_ << "\"," << other->is_first_rc_ << "," <<
+                it->length() - it->suffix_edges_[i]->length_ << "]";
+            if (i < it->suffix_edges_.size() - 1) {
+                os << ",";
+            }
+        }
+
+        os << "]}";
+    }
+
+    os << "}";
+
+    if (sequence_ids.empty()) {
+        os << "}";
+        os.close();
+        return;
+    }
+
+    os << ",\"piles\":{";
+    is_first = true;
+    for (const auto& it: sequence_ids) {
+        if (!is_first) {
+            os << ",";
+        }
+        is_first = false;
+
+        os << piles_[it]->to_json();
+    }
+
+    os << "}}";
+    os.close();
 }
 
 }

@@ -5,8 +5,7 @@
  */
 
 #include <algorithm>
-#include <iostream>
-#include <fstream>
+#include <sstream>
 #include <deque>
 
 #include "overlap.hpp"
@@ -640,25 +639,46 @@ bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
     return true;
 }
 
-void Pile::print_csv(std::string path, uint16_t dataset_median) const {
+std::string Pile::to_json() const {
 
-    std::vector<uint8_t> slope_graph(data_.size(), 0);
-    for (const auto& it: hills_) {
-        slope_graph[it.first] = 2;
-        slope_graph[it.second] = 1;
-    }
+    std::stringstream ss;
+    ss << "\"" << id_ << "\":{";
 
-    const std::vector<uint16_t>& corrected_data = corrected_data_.empty() ?
-        data_ : corrected_data_;
-
-    std::ofstream out(path);
-    out << "x " << id_ << " slopes median dataset_median y" << std::endl;
+    ss << "\"y\":[";
     for (uint32_t i = 0; i < data_.size(); ++i) {
-        out << i << " " << data_[i] << " " <<
-            (uint16_t) slope_graph[i] << " " << median_ << " " << dataset_median <<
-            " " << corrected_data[i] << std::endl;
+        ss << data_[i];
+        if (i < data_.size() - 1) {
+            ss << ",";
+        }
     }
-    out.close();
+    ss << "],";
+
+    ss << "\"~y\":[";
+    for (uint32_t i = 0; i < corrected_data_.size(); ++i) {
+        ss << corrected_data_[i];
+        if (i < corrected_data_.size() - 1) {
+            ss << ",";
+        }
+    }
+    ss << "],";
+
+    ss << "\"b\":" << begin_ << ",";
+    ss << "\"e\":" << end_ << ",";
+
+    ss << "\"h\":[";
+    for (uint32_t i = 0; i < hills_.size(); ++i) {
+        ss << hills_[i].first << "," << hills_[i].second;
+        if (i < hills_.size() - 1) {
+            ss << ",";
+        }
+    }
+    ss << "],";
+
+    ss << "\"m\":" << median_ << ",";
+    ss << "\"p10\":" << p10_;
+    ss << "}";
+
+    return ss.str();
 }
 
 }
