@@ -58,9 +58,7 @@ public:
     Node(uint64_t id, uint64_t sequence_id, const std::string& name,
         const std::string& data);
     // Unitig
-    Node(uint64_t id, Node* begin_node, Node* end_node,
-        std::unordered_set<uint64_t>& marked_nodes,
-        std::unordered_set<uint64_t>& marked_edges);
+    Node(uint64_t id, Node* begin_node, Node* end_node);
     Node(const Node&) = delete;
     const Node& operator=(const Node&) = delete;
 
@@ -126,13 +124,11 @@ public:
 Graph::Node::Node(uint64_t id, uint64_t sequence_id, const std::string& name,
     const std::string& data)
         : id_(id), name_(name), data_(data), prefix_edges_(), suffix_edges_(),
-        sequence_ids_(1, sequence_id), is_first_rc_(id % 2), is_last_rc_(id % 2),
+        sequence_ids_(1, sequence_id), is_first_rc_(id & 1), is_last_rc_(id & 1),
         is_marked_(false), pair_() {
 }
 
-Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
-    std::unordered_set<uint64_t>& marked_nodes,
-    std::unordered_set<uint64_t>& marked_edges)
+Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node)
         : id_(id), name_(), data_(), prefix_edges_(), suffix_edges_(),
         sequence_ids_(), is_marked_(false), pair_() {
 
@@ -145,16 +141,8 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
         exit(1);
     }
 
-    if (begin_node != end_node) {
-        if (begin_node->indegree() != 0) {
-            begin_node->prefix_edges_[0]->end_node_ = this;
-            prefix_edges_.emplace_back(begin_node->prefix_edges_[0]);
-        }
-    }
-
     is_first_rc_ = begin_node->is_first_rc_;
 
-    uint32_t edge_length = 0;
     auto node = begin_node;
     while (true) {
         auto edge = node->suffix_edges_[0];
@@ -164,13 +152,6 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
             node->sequence_ids_.begin(),
             node->sequence_ids_.end());
         is_last_rc_ = node->is_last_rc_;
-
-        edge_length += edge->length_;
-
-        edge->is_marked_ = true;
-        marked_edges.emplace(edge->id_);
-        node->is_marked_ = true;
-        marked_nodes.emplace(node->id_);
 
         node = edge->end_node_;
         if (node == end_node) {
@@ -184,15 +165,6 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node,
             end_node->sequence_ids_.begin(),
             end_node->sequence_ids_.end());
         is_last_rc_ = end_node->is_last_rc_;
-
-        end_node->is_marked_ = true;
-        marked_nodes.emplace(end_node->id_);
-
-        if (end_node->outdegree() != 0) {
-            end_node->suffix_edges_[0]->begin_node_ = this;
-            end_node->suffix_edges_[0]->length_ += edge_length;
-            suffix_edges_.push_back(end_node->suffix_edges_[0]);
-        }
     }
 }
 
@@ -774,12 +746,12 @@ void Graph::construct(bool preprocess) {
             edge_complement->pair_ = edge.get();
 
             node_a->suffix_edges_.emplace_back(edge.get());
-            node_a->pair_->prefix_edges_.push_back(edge_complement.get());
-            node_b->prefix_edges_.push_back(edge.get());
-            node_b->pair_->suffix_edges_.push_back(edge_complement.get());
+            node_a->pair_->prefix_edges_.emplace_back(edge_complement.get());
+            node_b->prefix_edges_.emplace_back(edge.get());
+            node_b->pair_->suffix_edges_.emplace_back(edge_complement.get());
 
-            edges_.push_back(std::move(edge));
-            edges_.push_back(std::move(edge_complement));
+            edges_.emplace_back(std::move(edge));
+            edges_.emplace_back(std::move(edge_complement));
 
         } else if (it->type() == OverlapType::kBA) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
@@ -791,13 +763,13 @@ void Graph::construct(bool preprocess) {
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
 
-            node_b->suffix_edges_.push_back(edge.get());
-            node_b->pair_->prefix_edges_.push_back(edge_complement.get());
-            node_a->prefix_edges_.push_back(edge.get());
-            node_a->pair_->suffix_edges_.push_back(edge_complement.get());
+            node_b->suffix_edges_.emplace_back(edge.get());
+            node_b->pair_->prefix_edges_.emplace_back(edge_complement.get());
+            node_a->prefix_edges_.emplace_back(edge.get());
+            node_a->pair_->suffix_edges_.emplace_back(edge_complement.get());
 
-            edges_.push_back(std::move(edge));
-            edges_.push_back(std::move(edge_complement));
+            edges_.emplace_back(std::move(edge));
+            edges_.emplace_back(std::move(edge_complement));
         }
 
         it.reset();
@@ -811,12 +783,11 @@ void Graph::construct(bool preprocess) {
     timer.print("[rala::Graph::construct] elapsed time =");
 }
 
-void Graph::simplify() {
+void Graph::simplify(const std::string& debug_prefix) {
 
     Timer timer;
     timer.start();
 
-    remove_isolated_nodes();
     uint32_t num_transitive_edges = remove_transitive_edges();
 
     uint32_t num_tips = 0;
@@ -836,6 +807,11 @@ void Graph::simplify() {
         if (num_changes == 0) {
             break;
         }
+    }
+
+    if (!debug_prefix.empty()) {
+        print_csv(debug_prefix + "_graph.csv");
+        print_json(debug_prefix + "_knots.json");
     }
 
     // TODO: try to avoid removal of long edges!
@@ -865,24 +841,6 @@ void Graph::simplify() {
     timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
-// TODO: reimplement remove_isolated_nodes
-uint32_t Graph::remove_isolated_nodes() {
-
-    uint32_t num_isolated_nodes = 0;
-
-    for (auto& it: nodes_) {
-        if (it == nullptr) {
-            continue;
-        }
-        if (it->indegree() == 0 && it->outdegree() == 0 && it->sequence_ids_.size() < 6) {
-            it.reset();
-            ++num_isolated_nodes;
-        }
-    }
-
-    return num_isolated_nodes;
-}
-
 uint32_t Graph::remove_transitive_edges() {
 
     uint32_t num_transitive_edges = 0;
@@ -909,8 +867,8 @@ uint32_t Graph::remove_transitive_edges() {
 
                         candidate_edge[c]->is_marked_ = true;
                         candidate_edge[c]->pair_->is_marked_ = true;
-                        marked_edges_.insert(candidate_edge[c]->id_);
-                        marked_edges_.insert(candidate_edge[c]->pair_->id_);
+                        marked_edges_.emplace(candidate_edge[c]->id_);
+                        marked_edges_.emplace(candidate_edge[c]->pair_->id_);
                         ++num_transitive_edges;
                     }
                 }
@@ -947,8 +905,8 @@ uint32_t Graph::remove_long_edges() {
 
                     other_edge->is_marked_ = true;
                     other_edge->pair_->is_marked_ = true;
-                    marked_edges_.insert(other_edge->id_);
-                    marked_edges_.insert(other_edge->pair_->id_);
+                    marked_edges_.emplace(other_edge->id_);
+                    marked_edges_.emplace(other_edge->pair_->id_);
                     ++num_long_edges;
                 }
             }
@@ -976,8 +934,8 @@ uint32_t Graph::remove_tips() {
             if (edge->end_node_->indegree() > 1) {
                 edge->is_marked_ = true;
                 edge->pair_->is_marked_ = true;
-                marked_edges_.insert(edge->id_);
-                marked_edges_.insert(edge->pair_->id_);
+                marked_edges_.emplace(edge->id_);
+                marked_edges_.emplace(edge->pair_->id_);
                 ++num_removed_edges;
             }
         }
@@ -989,9 +947,8 @@ uint32_t Graph::remove_tips() {
 
         num_tip_edges += num_removed_edges;
 
-        remove_marked_objects();
+        remove_marked_objects(true);
     }
-    remove_isolated_nodes();
 
     return num_tip_edges;
 }
@@ -1009,7 +966,7 @@ uint32_t Graph::remove_bubbles() {
 
         uint64_t curr_id = sink;
         while (curr_id != source) {
-            dst.push_back(curr_id);
+            dst.emplace_back(curr_id);
             curr_id = predecessor[curr_id];
         }
         dst.emplace_back(source);
@@ -1036,10 +993,10 @@ uint32_t Graph::remove_bubbles() {
 
         std::unordered_set<uint64_t> node_set;
         for (const auto& it: path) {
-            node_set.insert(it);
+            node_set.emplace(it);
         }
         for (const auto& it: other_path) {
-            node_set.insert(it);
+            node_set.emplace(it);
         }
         if (path.size() + other_path.size() - 2 != node_set.size()) {
             return false;
@@ -1082,7 +1039,7 @@ uint32_t Graph::remove_bubbles() {
         uint64_t source = node->id_;
 
         // BFS
-        node_queue.push_back(source);
+        node_queue.emplace_back(source);
         visited[visited_length++] = source;
         while (!node_queue.empty() && !found_sink) {
             uint64_t v = node_queue.front();
@@ -1105,7 +1062,7 @@ uint32_t Graph::remove_bubbles() {
 
                 distance[w] = distance[v] + edge->length_;
                 visited[visited_length++] = w;
-                node_queue.push_back(w);
+                node_queue.emplace_back(w);
 
                 if (predecessor[w] != -1) {
                     sink = w;
@@ -1146,11 +1103,11 @@ uint32_t Graph::remove_bubbles() {
                 for (const auto& edge_id: edges_for_removal) {
                     edges_[edge_id]->is_marked_ = true;
                     edges_[edge_id]->pair_->is_marked_ = true;
-                    marked_edges_.insert(edge_id);
-                    marked_edges_.insert(edges_[edge_id]->pair_->id_);
+                    marked_edges_.emplace(edge_id);
+                    marked_edges_.emplace(edges_[edge_id]->pair_->id_);
                 }
                 if (!edges_for_removal.empty()) {
-                    remove_marked_objects();
+                    remove_marked_objects(true);
                     ++num_bubbles_popped;
                 }
             }
@@ -1163,8 +1120,6 @@ uint32_t Graph::remove_bubbles() {
         }
         visited_length = 0;
     }
-
-    remove_isolated_nodes();
 
     return num_bubbles_popped;
 }
@@ -1212,7 +1167,7 @@ void Graph::find_removable_edges(std::vector<uint64_t>& dst,
     if (pref == -1 && suff == -1) {
         // remove whole path
         for (uint64_t i = 0; i < path.size() - 1; ++i) {
-            dst.push_back(find_edge(path[i], path[i + 1]));
+            dst.emplace_back(find_edge(path[i], path[i + 1]));
         }
         return;
     }
@@ -1227,17 +1182,17 @@ void Graph::find_removable_edges(std::vector<uint64_t>& dst,
     if (pref == -1) {
         // remove everything after last suff node
         for (uint64_t i = suff; i < path.size() - 1; ++i) {
-            dst.push_back(find_edge(path[i], path[i + 1]));
+            dst.emplace_back(find_edge(path[i], path[i + 1]));
         }
     } else if (suff == -1) {
         // remove everything before first pref node
         for (int64_t i = 0; i < pref; ++i) {
-            dst.push_back(find_edge(path[i], path[i + 1]));
+            dst.emplace_back(find_edge(path[i], path[i + 1]));
         }
     } else if (suff < pref) {
         // remove everything between last suff and first pref node
         for (int64_t i = suff; i < pref; ++i) {
-            dst.push_back(find_edge(path[i], path[i + 1]));
+            dst.emplace_back(find_edge(path[i], path[i + 1]));
         }
     }
 }
@@ -1248,6 +1203,9 @@ uint32_t Graph::create_unitigs() {
 
     uint64_t node_id = nodes_.size();
     std::vector<std::unique_ptr<Node>> unitigs;
+
+    uint64_t edge_id = edges_.size();
+    std::vector<std::unique_ptr<Edge>> unitig_edges;
 
     uint32_t num_unitigs_created = 0;
 
@@ -1291,36 +1249,118 @@ uint32_t Graph::create_unitigs() {
             continue;
         }
 
-        std::unique_ptr<Node> unitig(new Node(node_id++, begin_node, end_node,
-            marked_nodes_, marked_edges_));
+        std::unique_ptr<Node> unitig(new Node(node_id++, begin_node, end_node));
         std::unique_ptr<Node> unitig_complement(new Node(node_id++,
-            end_node->pair_, begin_node->pair_, marked_nodes_, marked_edges_));
+            end_node->pair_, begin_node->pair_));
 
         unitig->pair_ = unitig_complement.get();
         unitig_complement->pair_ = unitig.get();
+
+        if (begin_node != end_node) {
+            if (begin_node->indegree() != 0) {
+                const auto& edge = begin_node->prefix_edges_[0];
+
+                edge->is_marked_ = true;
+                edge->pair_->is_marked_ = true;
+                marked_edges_.emplace(edge->id_);
+                marked_edges_.emplace(edge->pair_->id_);
+
+                std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
+                    edge->begin_node_, unitig.get(), edge->length_));
+                std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
+                    unitig_complement.get(), edge->pair_->end_node_,
+                    edge->pair_->length_ + unitig_complement->length() -
+                    begin_node->pair_->length()));
+
+                unitig_edge->pair_ = unitig_edge_complement.get();
+                unitig_edge_complement->pair_ = unitig_edge.get();
+
+                edge->begin_node_->suffix_edges_.emplace_back(unitig_edge.get());
+                edge->pair_->end_node_->prefix_edges_.emplace_back(
+                    unitig_edge_complement.get());
+                unitig->prefix_edges_.emplace_back(unitig_edge.get());
+                unitig_complement->suffix_edges_.emplace_back(
+                    unitig_edge_complement.get());
+
+                unitig_edges.emplace_back(std::move(unitig_edge));
+                unitig_edges.emplace_back(std::move(unitig_edge_complement));
+            }
+
+            if (end_node->outdegree() != 0) {
+                const auto& edge = end_node->suffix_edges_[0];
+
+                edge->is_marked_ = true;
+                edge->pair_->is_marked_ = true;
+                marked_edges_.emplace(edge->id_);
+                marked_edges_.emplace(edge->pair_->id_);
+
+                std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
+                    unitig.get(), edge->end_node_, edge->length_ +
+                    unitig->length() - end_node->length()));
+                std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
+                    edge->pair_->begin_node_, unitig_complement.get(),
+                    edge->pair_->length_));
+
+                unitig_edge->pair_ = unitig_edge_complement.get();
+                unitig_edge_complement->pair_ = unitig_edge.get();
+
+                unitig->suffix_edges_.emplace_back(unitig_edge.get());
+                unitig_complement->prefix_edges_.emplace_back(
+                    unitig_edge_complement.get());
+                edge->end_node_->prefix_edges_.emplace_back(unitig_edge.get());
+                edge->pair_->begin_node_->suffix_edges_.emplace_back(
+                    unitig_edge_complement.get());
+
+                unitig_edges.emplace_back(std::move(unitig_edge));
+                unitig_edges.emplace_back(std::move(unitig_edge_complement));
+            }
+        }
 
         unitigs.emplace_back(std::move(unitig));
         unitigs.emplace_back(std::move(unitig_complement));
 
         ++num_unitigs_created;
+
+        // mark edges for deletion
+        auto node = begin_node;
+        while (true) {
+            const auto& edge = node->suffix_edges_[0];
+
+            edge->is_marked_ = true;
+            edge->pair_->is_marked_ = true;
+            marked_edges_.emplace(edge->id_);
+            marked_edges_.emplace(edge->pair_->id_);
+
+            node = edge->end_node_;
+            if (node == end_node) {
+                break;
+            }
+        }
     }
 
     for (uint64_t i = 0; i < unitigs.size(); ++i) {
         nodes_.emplace_back(std::move(unitigs[i]));
     }
+    for (uint64_t i = 0; i < unitig_edges.size(); ++i) {
+        edges_.emplace_back(std::move(unitig_edges[i]));
+    }
 
-    remove_marked_objects();
+    remove_marked_objects(true);
 
     return num_unitigs_created;
 }
 
-void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const {
+void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
+    bool drop_unassembled_sequences) const {
 
     uint32_t contig_id = 0;
     std::vector<uint32_t> contig_length;
     for (const auto& node: nodes_) {
-        if (node == nullptr || node->id_ % 2 == 0 || node->sequence_ids_.size() < 6 ||
-            node->length() < 10000) {
+        if (node == nullptr || node->is_rc()) {
+            continue;
+        }
+        if (drop_unassembled_sequences && (node->sequence_ids_.size() < 6 ||
+            node->length() < 10000)) {
             continue;
         }
         contig_length.emplace_back(node->data_.size());
@@ -1350,7 +1390,7 @@ void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const {
         contig_length.back());
 }
 
-void Graph::remove_marked_objects() {
+void Graph::remove_marked_objects(bool remove_nodes) {
 
     auto delete_edges = [&](std::vector<Edge*>& edges) -> void {
         for (uint32_t i = 0; i < edges.size(); ++i) {
@@ -1361,20 +1401,28 @@ void Graph::remove_marked_objects() {
         shrinkToFit(edges, 0);
     };
 
+    std::unordered_set<uint32_t> marked_nodes;
     for (const auto& it: marked_edges_) {
+        if (remove_nodes) {
+            marked_nodes.emplace(edges_[it]->begin_node_->id_);
+            marked_nodes.emplace(edges_[it]->end_node_->id_);
+        }
         delete_edges(edges_[it]->begin_node_->suffix_edges_);
         delete_edges(edges_[it]->end_node_->prefix_edges_);
+    }
+
+    if (remove_nodes) {
+        for (const auto& it: marked_nodes) {
+            if (nodes_[it]->outdegree() == 0 && nodes_[it]->indegree() == 0) {
+                nodes_[it].reset();
+            }
+        }
     }
 
     for (const auto& it: marked_edges_) {
         edges_[it].reset();
     }
     marked_edges_.clear();
-
-    for (const auto& it: marked_nodes_) {
-        nodes_[it].reset();
-    }
-    marked_nodes_.clear();
 }
 
 void Graph::print_csv(std::string path) const {
@@ -1411,7 +1459,7 @@ void Graph::print_gfa(std::string path) const {
     uint32_t unitig_id = 0;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->id_ % 2 == 1) {
+        if (it == nullptr || it->is_rc()) {
             continue;
         }
         if (it->name_.empty()) {
@@ -1458,7 +1506,7 @@ void Graph::print_json(std::string path) const {
 
     std::unordered_set<uint64_t> sequence_ids;
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc() || (it->outdegree() < 2 && it->indegree() < 2)) {
+        if (it == nullptr || it->is_rc() || !it->is_junction()) {
             continue;
         }
 

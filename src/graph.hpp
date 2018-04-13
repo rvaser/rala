@@ -47,12 +47,7 @@ public:
     /*!
      * @brief Removes transitive edges and tips, pops bubbles
      */
-    void simplify();
-
-    /*!
-     * @brief Removes nodes without edges (no information loss)
-     */
-    uint32_t remove_isolated_nodes();
+    void simplify(const std::string& debug_prefix);
 
     /*!
      * @brief Removes transitive edge (no information loss)
@@ -84,7 +79,8 @@ public:
     /*!
      * @brief Stores all contigs into dst
      */
-    void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const;
+    void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
+        bool drop_unassembled_sequences = true) const;
 
     /*!
      * @brief Prints assembly graph in csv format
@@ -131,7 +127,7 @@ private:
     void find_removable_edges(std::vector<uint64_t>& dst,
         const std::vector<uint64_t>& path);
 
-    void remove_marked_objects();
+    void remove_marked_objects(bool remove_nodes = false);
 
     class Node;
     class Edge;
@@ -148,8 +144,6 @@ private:
     std::unique_ptr<thread_pool::ThreadPool> thread_pool_;
 
     std::vector<std::unique_ptr<Node>> nodes_;
-    std::unordered_set<uint64_t> marked_nodes_;
-
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_set<uint64_t> marked_edges_;
 };
