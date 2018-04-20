@@ -11,7 +11,10 @@ def eprint(*args, **kwargs):
 class Plotter:
     def __init__(self, knots, out_directory):
         self.knots = knots
-        self.out_directory = out_directory
+        self.out_directory = out_directory + "/"
+        if (not os.path.isdir(self.out_directory)):
+            eprint("[rala::Plotter::__init__] error: invalid out directory!")
+            sys.exit(1)
 
     def __enter__(self):
         pass
@@ -24,7 +27,7 @@ class Plotter:
         if ("y" not in pile or "~y" not in pile or "b" not in pile or
             "e" not in pile or "h" not in pile or "m" not in pile or
             "p10" not in pile):
-            eprint("[rala::Plotter::plot_pile] error: incomplete pile")
+            eprint("[rala::Plotter::plot_pile] error: incomplete pile!")
             sys.exit(1);
 
         x = xrange(len(pile["y"]))
@@ -60,23 +63,23 @@ class Plotter:
         try:
             k = open(self.knots)
         except Exception:
-            eprint("[rala::Plotter::run] error: unable to open file {}".format(self.knots))
+            eprint("[rala::Plotter::run] error: unable to open file {}!".format(self.knots))
             sys.exit(1)
 
         try:
             data = json.load(k)
         except Exception:
-            eprint("[rala::Plotter::run] error: file is not in JSON format")
+            eprint("[rala::Plotter::run] error: file is not in JSON format!")
             sys.exit(1)
 
         if ("knots" not in data or not data["knots"] or\
             "piles" not in data or not data["piles"]):
-            eprint("[rala::Plotter::run] error: incomplete input file")
+            eprint("[rala::Plotter::run] error: incomplete input file!")
             sys.exit(1)
 
         for knot in data["knots"]:
             if (knot not in data["piles"]):
-                eprint("[rala::Plotter::run] error: missing pile {}".format(knot))
+                eprint("[rala::Plotter::run] error: missing pile {}!".format(knot))
                 sys.exit(1)
 
             num_plots = len(data["knots"][knot]["p"]) + len(data["knots"][knot]["s"])
@@ -89,7 +92,7 @@ class Plotter:
             ax_row = 0
             for prefix in data["knots"][knot]["p"]:
                 if (prefix[0] not in data["piles"]):
-                    eprint("[rala::Plotter::run] error: missing pile {}".format(prefix[0]))
+                    eprint("[rala::Plotter::run] error: missing pile {}!".format(prefix[0]))
                     sys.exit(1)
 
                 Plotter.plot_pile(data["piles"][prefix[0]], prefix[2], prefix[3],\
@@ -100,7 +103,7 @@ class Plotter:
 
             for suffix in data["knots"][knot]["s"]:
                 if (suffix[0] not in data["piles"]):
-                    eprint("[rala::Plotter::run] error: missing pile {}".format(suffix[0]))
+                    eprint("[rala::Plotter::run] error: missing pile {}!".format(suffix[0]))
                     sys.exit(1)
 
                 Plotter.plot_pile(data["piles"][knot], 0, suffix[3],\
@@ -112,7 +115,7 @@ class Plotter:
             figure.text(0.5, 0.04, "base", ha="center")
             figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
             matplotlib.pyplot.legend(loc="best")
-            matplotlib.pyplot.savefig(str(knot) + "_knots.png")
+            matplotlib.pyplot.savefig(self.out_directory + str(knot) + "_knots.png")
             matplotlib.pyplot.close(figure)
 
         sys.exit(1);
@@ -127,8 +130,8 @@ if __name__ == "__main__":
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("knots", help="""input file in JSON format containing
         information about read piles and overlaps between them""")
-    parser.add_argument("-o", "--out-directory", default=".", help="""path in
-        which plotted images will be saved""")
+    parser.add_argument("-o", "--out-directory", default=os.getcwd(),
+        help="""path in which plotted images will be saved""")
 
     args = parser.parse_args()
 
