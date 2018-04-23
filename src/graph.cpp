@@ -794,13 +794,11 @@ void Graph::simplify(const std::string& debug_prefix) {
     uint32_t num_bubbles = 0;
 
     while (true) {
-        uint32_t num_changes = create_unitigs();
+        uint32_t num_changes = remove_tips();
+        num_tips += num_changes;
+        num_changes += num_changes;
 
-        uint32_t num_changes_part = remove_tips();
-        num_tips += num_changes_part;
-        num_changes += num_changes_part;
-
-        num_changes_part = remove_bubbles();
+        uint32_t num_changes_part = remove_bubbles();
         num_bubbles += num_changes_part;
         num_changes += num_changes_part;
 
@@ -918,19 +916,43 @@ uint32_t Graph::remove_long_edges() {
     return num_long_edges;
 }
 
-// TODO: reimplement remove_tips
 uint32_t Graph::remove_tips() {
 
     uint32_t num_tip_edges = 0;
 
-    for (const auto& node: nodes_) {
-        if (node == nullptr || !node->is_tip()) {
+    std::vector<bool> is_visited(nodes_.size(), false);
+
+    for (const auto& it: nodes_) {
+        if (it == nullptr || is_visited[it->id_] || !it->is_tip()) {
+            continue;
+        }
+
+        bool is_circular = false;
+        uint32_t num_reads = 0;
+
+        auto end_node = it.get();
+        while (!end_node->is_junction()) {
+            num_reads += end_node->sequence_ids_.size();
+            is_visited[end_node->id_] = true;
+            is_visited[end_node->pair_->id_] = true;
+            if (end_node->outdegree() == 0 ||
+                end_node->suffix_edges_[0]->end_node_->is_junction()) {
+                break;
+            }
+            end_node = end_node->suffix_edges_[0]->end_node_;
+            if (end_node->id_ == it->id_) {
+                is_circular = true;
+                break;
+            }
+        }
+
+        if (is_circular || end_node->outdegree() == 0 || num_reads > 5) {
             continue;
         }
 
         uint32_t num_removed_edges = 0;
 
-        for (const auto& edge: node->suffix_edges_) {
+        for (const auto& edge: end_node->suffix_edges_) {
             if (edge->end_node_->indegree() > 1) {
                 edge->is_marked_ = true;
                 edge->pair_->is_marked_ = true;
@@ -940,9 +962,13 @@ uint32_t Graph::remove_tips() {
             }
         }
 
-        if (num_removed_edges == node->suffix_edges_.size()) {
-            node->is_marked_ = true;
-            node->pair_->is_marked_ = true;
+        if (num_removed_edges == end_node->suffix_edges_.size()) {
+            auto curr_node = it.get();
+            while (curr_node->id_ != end_node->id_) {
+                end_node->suffix_edges_[0]->is_marked_ = true;
+                end_node->suffix_edges_[0]->pair_->is_marked_ = true;
+                curr_node = curr_node->suffix_edges_[0]->end_node_;
+            }
         }
 
         num_tip_edges += num_removed_edges;
