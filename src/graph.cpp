@@ -1481,7 +1481,7 @@ void Graph::print_gfa(std::string path) const {
             continue;
         }
 
-        const auto& begin_node_name = nodes_[it->begin_node_->id_]->name_.empty() ?
+        const auto& begin_node_name = !nodes_[it->begin_node_->id_]->name_.empty() ?
             nodes_[it->begin_node_->id_]->name_ :
             node_id_to_unitig_name[it->begin_node_->id_];
 
@@ -1514,7 +1514,7 @@ void Graph::print_json(std::string path) const {
             os << ",";
         }
         is_first = false;
-        os << "\"" << it->sequence_ids_.front() << "\":{";
+        os << "\"" << it->sequence_ids_.front() << "\":{\"n\":" << it->id_ << ",";
 
         os << "\"p\":[";
 

@@ -82,6 +82,11 @@ class Plotter:
                 eprint("[rala::Plotter::run] error: missing pile {}!".format(knot))
                 sys.exit(1)
 
+            if ("n" not in data["knots"][knot] or "p" not in data["knots"][knot] or\
+                "s" not in data["knots"][knot]):
+                eprint("[rala::Plotter::run] error: incomplete knot!")
+                sys.exit(1)
+
             num_plots = len(data["knots"][knot]["p"]) + len(data["knots"][knot]["s"])
             if (num_plots == 0):
                 continue
@@ -115,7 +120,8 @@ class Plotter:
             figure.text(0.5, 0.04, "base", ha="center")
             figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
             matplotlib.pyplot.legend(loc="best")
-            matplotlib.pyplot.savefig(self.out_directory + str(knot) + "_knots.png")
+            matplotlib.pyplot.savefig(self.out_directory +\
+                str(data["knots"][knot]['n']) + "_knots.png")
             matplotlib.pyplot.close(figure)
 
         sys.exit(1);
