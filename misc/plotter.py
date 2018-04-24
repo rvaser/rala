@@ -72,10 +72,23 @@ class Plotter:
             eprint("[rala::Plotter::run] error: file is not in JSON format!")
             sys.exit(1)
 
-        if ("knots" not in data or not data["knots"] or\
-            "piles" not in data or not data["piles"]):
+        if ("piles" not in data or not data["piles"]):
             eprint("[rala::Plotter::run] error: incomplete input file!")
             sys.exit(1)
+
+        if ("knots" not in data or not data["knots"]):
+            for pile in data["piles"]:
+                figure, axes = matplotlib.pyplot.subplots(1, 1)
+
+                Plotter.plot_pile(data["piles"][pile], 0, 0, "p", str(pile), axes)
+
+                figure.text(0.5, 0.04, "base", ha="center")
+                figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
+                matplotlib.pyplot.legend(loc="best")
+                matplotlib.pyplot.savefig(self.out_directory + str(pile) + ".png")
+                matplotlib.pyplot.close(figure)
+
+            return
 
         for knot in data["knots"]:
             if (knot not in data["piles"]):
