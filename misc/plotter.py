@@ -126,7 +126,7 @@ class Plotter:
 
                 Plotter.plot_pile(data["piles"][knot], 0, suffix[3],\
                     "s", knot, axes[ax_row, 0])
-                Plotter.plot_pile(data["piles"][suffix[0]], suffix[3], suffix[3],\
+                Plotter.plot_pile(data["piles"][suffix[0]], suffix[2], suffix[3],\
                     "p", suffix[0] + " - " + suffix[1], axes[ax_row, 1])
                 ax_row += 1
 
