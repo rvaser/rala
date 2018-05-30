@@ -92,6 +92,21 @@ public:
      */
     void find_repetitive_regions(uint16_t dataset_median);
 
+    /*
+     * @brief Manually add repetitive region in data_
+     */
+    void add_repetitive_region(uint32_t begin, uint32_t end);
+
+    /*
+     * @brief Manually add reverse repetitive region
+     */
+    void resolve_peculiar_regions();
+
+    /*
+     * @brief Chech for selfmeric reads
+     */
+    void add_peculiar_region(uint32_t begin, uint32_t end);
+
     /*!
      * @brief Checks whether overlap [begin, end> is valid with respect to
      * hills_ which indicate repetitive regions of the genome
@@ -119,6 +134,7 @@ private:
     std::vector<uint16_t> data_;
     std::vector<uint16_t> corrected_data_;
     std::vector<std::pair<uint32_t, uint32_t>> hills_;
+    std::vector<std::pair<uint32_t, uint32_t>> peculiars_;
 };
 
 }

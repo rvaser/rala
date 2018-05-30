@@ -272,8 +272,22 @@ void Graph::initialize() {
                 continue;
             }
             if (overlaps[i]->a_id() == overlaps[i]->b_id()) {
+                if (overlaps[i]->a_begin() == overlaps[i]->b_begin() &&
+                    overlaps[i]->a_end() == overlaps[i]->b_end()) {
+                    // possible selfmeric
+                    piles_[overlaps[i]->a_id()]->add_peculiar_region(
+                        overlaps[i]->a_begin(), overlaps[i]->a_end());
+                } else {
+                    // repeat
+                    // TODO: treat tandem and normal repeats differently?
+                    // if (overlaps[i]->a_begin() < overlaps[i]->b_end() &&
+                    //     overlaps[i]->b_begin() < overlaps[i]->a_end()) {
+                    piles_[overlaps[i]->a_id()]->add_repetitive_region(
+                        std::min(overlaps[i]->a_begin(), overlaps[i]->b_begin()),
+                        std::max(overlaps[i]->a_end(), overlaps[i]->b_end()));
+                }
                 is_valid_overlap_[num_overlaps + i] = false;
-                overlaps[i].reset();
+                //overlaps[i].reset();
                 continue;
             }
             for (uint64_t j = i + 1; j < end; ++j) {
@@ -284,6 +298,7 @@ void Graph::initialize() {
                     continue;
                 }
 
+                // TODO: process dual overlaps similar to self overlaps?
                 if (overlaps[i]->length() > overlaps[j]->length()) {
                     is_valid_overlap_[num_overlaps + j] = false;
                 } else {
@@ -301,14 +316,15 @@ void Graph::initialize() {
             if (overlaps[i] == nullptr) {
                 continue;
             }
+
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_begin() + 1) << 1);
+                (overlaps[i]->a_begin() + 4) << 1);
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_end() - 1) << 1 | 1);
+                (overlaps[i]->a_end() - 4) << 1 | 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_begin() + 1) << 1);
+                (overlaps[i]->b_begin() + 4) << 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_end() - 1) << 1 | 1);
+                (overlaps[i]->b_end() - 4) << 1 | 1);
         }
     };
 
@@ -370,8 +386,61 @@ void Graph::initialize() {
 
     fprintf(stderr, "[rala::Graph::initialize] loaded overlaps\n");
 
-    // trim reads
+    // find coverage median of the dataset
     std::vector<std::future<void>> thread_futures;
+    for (const auto& it: piles_) {
+        if (it == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t i) -> void {
+                piles_[i]->find_median();
+            }, it->id()));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    std::vector<uint16_t> medians;
+    for (const auto& it: piles_) {
+        if (it == nullptr) {
+            continue;
+        }
+        medians.emplace_back(it->median());
+    }
+
+    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+        medians.end());
+    coverage_median_ = medians[medians.size() / 2];
+
+    fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
+        coverage_median_);
+
+    // find chimeric reads
+    for (const auto& it: piles_) {
+        if (it == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint32_t j) -> void {
+                if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
+                    piles_[j].reset();
+                } else {
+                    piles_[j]->resolve_peculiar_regions();
+                }
+            }, it->id()));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
+
+    // trim reads
     for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
@@ -412,38 +481,7 @@ void Graph::preprocess() {
     Timer timer;
     timer.start();
 
-    // find coverage median of the dataset
-    std::vector<std::future<void>> thread_futures;
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t i) -> void {
-                piles_[i]->find_median();
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    std::vector<uint16_t> medians;
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-        medians.emplace_back(it->median());
-    }
-
-    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
-        medians.end());
-    coverage_median_ = medians[medians.size() / 2];
-
-    fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
-        coverage_median_);
-
+    // TODO: use low quaility filtering?
     // filter low quality reads
     /*uint32_t num_low_quality_reads = 0;
     for (auto& it: piles_) {
@@ -459,27 +497,9 @@ void Graph::preprocess() {
         num_low_quality_reads);
     */
 
-    // find chimeric reads
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t j) -> void {
-                if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
-                    piles_[j].reset();
-                }
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
-
     // correct piles
+    std::vector<std::future<void>> thread_futures;
+
     oparser_->reset();
     while (true) {
         std::vector<std::vector<std::shared_ptr<Overlap>>> distributed_overlaps(piles_.size());
@@ -1002,6 +1022,10 @@ uint32_t Graph::remove_bubbles() {
     auto calculate_path_length = [&](const std::vector<uint64_t>& path)
         -> uint32_t {
 
+        if (path.empty()) {
+            return 0;
+        }
+
         uint32_t path_length = nodes_[path.back()]->length();
         for (uint64_t i = 0; i < path.size() - 1; ++i) {
             for (const auto& edge: nodes_[path[i]]->suffix_edges_) {
@@ -1016,6 +1040,10 @@ uint32_t Graph::remove_bubbles() {
 
     auto is_valid_bubble = [&](const std::vector<uint64_t>& path,
         const std::vector<uint64_t>& other_path) -> bool {
+
+        if (path.empty() || other_path.empty()) {
+            return false;
+        }
 
         std::unordered_set<uint64_t> node_set;
         for (const auto& it: path) {
@@ -1039,14 +1067,12 @@ uint32_t Graph::remove_bubbles() {
             std::max(path_length, other_path_length) * 0.8) {
 
             for (uint64_t i = 1; i < other_path.size() - 1; ++i) {
-                if (nodes_[other_path[i]]->indegree() > 1 ||
-                    nodes_[other_path[i]]->outdegree() > 1) {
+                if (nodes_[other_path[i]]->is_junction()) {
                     return false;
                 }
             }
             for (uint64_t i = 1; i < path.size() - 1; ++i) {
-                if (nodes_[path[i]]->indegree() > 1 ||
-                    nodes_[path[i]]->outdegree() > 1) {
+                if (nodes_[path[i]]->is_junction()) {
                     return false;
                 }
             }
@@ -1126,6 +1152,20 @@ uint32_t Graph::remove_bubbles() {
                     find_removable_edges(edges_for_removal, path);
                 }
 
+                if (edges_for_removal.empty()) {
+                    uint32_t path_length = calculate_path_length(path);
+                    uint32_t other_path_length = calculate_path_length(other_path);
+                    if (std::min(path_length, other_path_length) >=
+                        std::max(path_length, other_path_length) * 0.8) {
+
+                        if (path_num_reads > other_path_num_reads) {
+                            find_removable_edges(edges_for_removal, path);
+                        } else {
+                            find_removable_edges(edges_for_removal, other_path);
+                        }
+                    }
+                }
+
                 for (const auto& edge_id: edges_for_removal) {
                     edges_[edge_id]->is_marked_ = true;
                     edges_[edge_id]->pair_->is_marked_ = true;
@@ -1173,6 +1213,10 @@ uint64_t Graph::find_edge(uint64_t src, uint64_t dst) {
 
 void Graph::find_removable_edges(std::vector<uint64_t>& dst,
     const std::vector<uint64_t>& path) {
+
+    if (path.empty()) {
+        return;
+    }
 
     // find first node with multiple in edges
     int64_t pref = -1;

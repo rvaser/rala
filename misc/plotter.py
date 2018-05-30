@@ -137,9 +137,6 @@ class Plotter:
                 str(data["knots"][knot]['n']) + "_knots.png")
             matplotlib.pyplot.close(figure)
 
-        sys.exit(1);
-
-
 #*******************************************************************************
 
 if __name__ == "__main__":
