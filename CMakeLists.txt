@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(rala_build_tests "Build rala unit tests" OFF)
+option(rala_build_statistics "Build assembly statistics" OFF)
 
 add_executable(rala
     src/graph.cpp
@@ -31,5 +32,15 @@ target_link_libraries(rala bioparser thread_pool pthread)
 if (rala_build_tests)
 
 endif(rala_build_tests)
+
+if (rala_build_statistics)
+    include_directories(${PROJECT_SOURCE_DIR}/src)
+
+    add_executable(rast
+        src/sequence.cpp
+        test/rast.cpp)
+
+    target_link_libraries(rast bioparser)
+endif(rala_build_statistics)
 
 install(TARGETS rala DESTINATION bin)

@@ -548,7 +548,7 @@ void Graph::preprocess() {
         thread_futures.clear();
 
         if (!status) {
-            fprintf(stderr, "[rala::Graph::preprocess] load overlaps\n");
+            fprintf(stderr, "[rala::Graph::preprocess] loaded overlaps\n");
             fprintf(stderr, "[rala::Graph::preprocess] corrected piles\n");
 
             // update coverage medians

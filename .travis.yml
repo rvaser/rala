@@ -31,7 +31,7 @@ install:
 script:
     - mkdir build
     - cd build
-    - cmake -DCMAKE_BUILD_TYPE=Release ..
+    - cmake -DCMAKE_BUILD_TYPE=Release -Drala_build_statistics=ON ..
     - make
 
 notifications:
