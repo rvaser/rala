@@ -21,6 +21,7 @@ namespace bioparser {
 namespace rala {
 
 class Pile;
+class Graph;
 
 enum class OverlapType {
     kX, // bad overlap
@@ -83,6 +84,7 @@ public:
 
     friend bioparser::MhapParser<Overlap>;
     friend bioparser::PafParser<Overlap>;
+    friend Graph;
 private:
     Overlap(uint64_t a_id, uint64_t b_id, double error, uint32_t minmers,
         uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,

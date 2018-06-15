@@ -76,11 +76,13 @@ public:
      */
     uint32_t create_unitigs();
 
+    void resolve_repeats(const std::string& path);
+
     /*!
      * @brief Stores all contigs into dst
      */
     void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
-        bool drop_unassembled_sequences = true) const;
+        bool drop_unassembled_sequences = true);
 
     /*!
      * @brief Prints assembly graph in csv format
@@ -97,6 +99,8 @@ public:
      * with misc/plotter.py)
      */
     void print_json(std::string path) const;
+
+    void print_fastq(std::string path) const;
 
     friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);

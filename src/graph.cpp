@@ -830,12 +830,13 @@ void Graph::simplify(const std::string& debug_prefix) {
     if (!debug_prefix.empty()) {
         print_csv(debug_prefix + "_graph.csv");
         print_json(debug_prefix + "_knots.json");
+        print_fastq(debug_prefix + "_knots.fasta");
     }
 
     // TODO: try to avoid removal of long edges!
-    uint32_t num_long_edges = remove_long_edges();
+    // uint32_t num_long_edges = remove_long_edges();
 
-    while (true) {
+    /*while (true) {
         uint32_t num_changes = create_unitigs();
 
         uint32_t num_changes_part = remove_tips();
@@ -845,7 +846,7 @@ void Graph::simplify(const std::string& debug_prefix) {
         if (num_changes == 0) {
             break;
         }
-    }
+    }*/
 
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
@@ -853,10 +854,104 @@ void Graph::simplify(const std::string& debug_prefix) {
         num_tips);
     fprintf(stderr, "[rala::Graph::simplify] number of bubbles = %u\n",
         num_bubbles);
-    fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
-        num_long_edges);
+    // fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
+    //     num_long_edges);
     timer.stop();
     timer.print("[rala::Graph::simplify] elapsed time =");
+}
+
+void Graph::resolve_repeats(const std::string& path) {
+
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
+
+    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
+        if (src.size() < suffix.size()) {
+            return false;
+        }
+        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
+        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
+    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
+        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
+    } else {
+        fprintf(stderr, "[rala::resolve_repeats] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
+        exit(1);
+    }
+
+    std::unordered_set<uint64_t> node_ids;
+
+    for (const auto& it: nodes_) {
+        if (it == nullptr || it->is_rc() || !it->is_junction()) {
+            continue;
+        }
+
+        node_ids.emplace(it->id_);
+
+        for (const auto& edge: it->prefix_edges_) {
+            if (edge->begin_node_->is_rc()) {
+                node_ids.emplace(edge->begin_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->begin_node_->id_);
+            }
+        }
+        for (const auto& edge: it->suffix_edges_) {
+            if (edge->end_node_->is_rc()) {
+                node_ids.emplace(edge->end_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->end_node_->id_);
+            }
+        }
+    }
+
+    std::unordered_map<uint64_t, uint64_t> node_id_to_pile_id;
+    std::vector<std::unique_ptr<Pile>> piles;
+    uint64_t num_nodes = 0;
+    for (const auto& it: node_ids) {
+        piles.emplace_back(createPile(it, nodes_[it]->data_.size()));
+        node_id_to_pile_id[it] = num_nodes;
+        ++num_nodes;
+    }
+
+    std::vector<std::unique_ptr<Overlap>> overlaps;
+    oparser->parse_objects(overlaps, -1);
+
+    std::vector<std::vector<uint32_t>> overlap_bounds(piles_.size());
+    for (const auto& it: overlaps) {
+        uint32_t node_id = atoi(it->b_name_.c_str());
+        overlap_bounds[node_id_to_pile_id[node_id]].emplace_back((it->b_begin() + 1) << 1);
+        overlap_bounds[node_id_to_pile_id[node_id]].emplace_back((it->b_end() - 1) << 1 | 1);
+    }
+
+    std::ofstream os("debug.json");
+    os << "{\"piles\":{";
+    bool is_first = true;
+
+    std::vector<uint32_t> medians;
+
+    for (auto& it: piles) {
+        it->add_layers(overlap_bounds[node_id_to_pile_id[it->id()]]);
+        it->find_median();
+        medians.emplace_back(it->median());
+
+        if (!is_first) {
+            os << ",";
+        }
+        is_first = false;
+        os << it->to_json();
+    }
+
+    os << "}}";
+    os.close();
+
+    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+        medians.end());
+    auto coverage_median = medians[medians.size() / 2];
+    fprintf(stderr, "[rala::Graph::resolve_repeats] repeat coverage median = %u\n",
+        coverage_median);
 }
 
 uint32_t Graph::remove_transitive_edges() {
@@ -1421,7 +1516,9 @@ uint32_t Graph::create_unitigs() {
 }
 
 void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
-    bool drop_unassembled_sequences) const {
+    bool drop_unassembled_sequences) {
+
+    create_unitigs();
 
     uint32_t contig_id = 0;
     std::vector<uint32_t> contig_length;
@@ -1640,5 +1737,43 @@ void Graph::print_json(std::string path) const {
     os << "}}";
     os.close();
 }
+
+void Graph::print_fastq(std::string path) const {
+
+    std::unordered_set<uint64_t> node_ids;
+
+    for (const auto& it: nodes_) {
+        if (it == nullptr || it->is_rc() || !it->is_junction()) {
+            continue;
+        }
+
+        node_ids.emplace(it->id_);
+
+        for (const auto& edge: it->prefix_edges_) {
+            if (edge->begin_node_->is_rc()) {
+                node_ids.emplace(edge->begin_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->begin_node_->id_);
+            }
+        }
+        for (const auto& edge: it->suffix_edges_) {
+            if (edge->end_node_->is_rc()) {
+                node_ids.emplace(edge->end_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->end_node_->id_);
+            }
+        }
+    }
+
+    std::ofstream os(path);
+
+    for (const auto& it: node_ids) {
+        os << ">" << it << std::endl;
+        os << nodes_[it]->data_ << std::endl;
+    }
+
+    os.close();
+}
+
 
 }
