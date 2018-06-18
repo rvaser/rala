@@ -472,6 +472,7 @@ void Graph::initialize() {
 
     fprintf(stderr, "[rala::Graph::initialize] number of prefiltered sequences = %lu\n",
         num_prefiltered_sequences);
+
     timer.stop();
     timer.print("[rala::Graph::initialize] elapsed time =");
 }
@@ -926,32 +927,59 @@ void Graph::resolve_repeats(const std::string& path) {
         overlap_bounds[node_id_to_pile_id[node_id]].emplace_back((it->b_end() - 1) << 1 | 1);
     }
 
-    std::ofstream os("debug.json");
-    os << "{\"piles\":{";
-    bool is_first = true;
-
     std::vector<uint32_t> medians;
-
     for (auto& it: piles) {
         it->add_layers(overlap_bounds[node_id_to_pile_id[it->id()]]);
         it->find_median();
         medians.emplace_back(it->median());
+    }
+
+    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+        medians.end());
+    coverage_median_ = medians[medians.size() / 2];
+    fprintf(stderr, "[rala::Graph::resolve_repeats] repeat coverage median = %u\n",
+        coverage_median_);
+
+    std::ofstream os("debug.json");
+    os << "{\"piles\":{";
+    bool is_first = true;
+
+    for (auto& it: piles) {
+        it->find_repetitive_regions(coverage_median_);
 
         if (!is_first) {
             os << ",";
         }
         is_first = false;
         os << it->to_json();
+
+        const auto& node = nodes_[it->id()];
+        for (const auto& edge: node->suffix_edges_) {
+            if (!it->is_valid_overlap(edge->length_, node->data_.size())) {
+                edge->is_marked_ = true;
+                edge->pair_->is_marked_ = true;
+                marked_edges_.emplace(edge->id_);
+                marked_edges_.emplace(edge->pair_->id_);
+            }
+        }
+        for (const auto& edge: node->prefix_edges_) {
+            if (!it->is_valid_overlap(0, edge->begin_node_->data_.size() - edge->length_)) {
+                edge->is_marked_ = true;
+                edge->pair_->is_marked_ = true;
+                marked_edges_.emplace(edge->id_);
+                marked_edges_.emplace(edge->pair_->id_);
+            }
+        }
     }
 
     os << "}}";
     os.close();
 
-    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
-        medians.end());
-    auto coverage_median = medians[medians.size() / 2];
-    fprintf(stderr, "[rala::Graph::resolve_repeats] repeat coverage median = %u\n",
-        coverage_median);
+    remove_marked_objects();
+    remove_bubbles();
+    remove_tips();
+
+    print_csv("debug.csv");
 }
 
 uint32_t Graph::remove_transitive_edges() {
