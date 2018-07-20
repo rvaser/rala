@@ -28,74 +28,27 @@ void subpileUpdate(Subpile& src, int32_t position) {
     }
 }
 
-using Hill = std::pair<uint32_t, uint32_t>;
-
-enum class HillType {
-    kInvalid,
-    kNormal,
-    kRepeat,
-    kChimeric
-};
-
-HillType hillType(const std::pair<uint32_t, uint32_t>& hill_begin,
-    const std::pair<uint32_t, uint32_t>& hill_end, uint32_t dataset_median,
-    const std::vector<uint16_t>& pile, uint32_t begin, uint32_t end) {
-
-    if (((hill_end.first >> 1) + hill_end.second) / 2 -
-        ((hill_begin.first >> 1) + hill_begin.second) / 2 > 0.84 * (end - begin)) {
-        return HillType::kInvalid;
-    }
-
-    bool found_peak = false;
-    uint32_t peak_value = 1.3 * std::max(pile[hill_begin.second], pile[hill_end.first >> 1]);
-
-    uint32_t valid_points = 0;
-    uint32_t min_value = dataset_median * 1.3;
-
-    for (uint32_t i = hill_begin.second + 1; i < (hill_end.first >> 1); ++i) {
-        if (pile[i] > min_value) {
-            ++valid_points;
-        }
-        if (pile[i] > peak_value) {
-            found_peak = true;
-        }
-    }
-    if (!found_peak) {
-        return HillType::kInvalid;
-    }
-    if (valid_points < 0.84 * ((hill_end.first >> 1) - hill_begin.second)) {
-        if ((hill_end.first >> 1) - hill_begin.second < 756 &&
-            (hill_begin.first >> 1) > 0.05 * (end - begin) + begin &&
-            (hill_end.second) < 0.95 * (end - begin) + begin) {
-
-            return HillType::kChimeric;
-        }
-        return HillType::kNormal;
-    }
-    return HillType::kRepeat;
-}
-
-void hillMerge(std::vector<std::pair<uint32_t, uint32_t>>& hills) {
+void intervalMerge(std::vector<std::pair<uint32_t, uint32_t>>& intervals) {
 
     std::vector<std::pair<uint32_t, uint32_t>> tmp;
-    std::vector<bool> is_merged(hills.size(), false);
-    for (uint32_t i = 0; i < hills.size(); ++i) {
+    std::vector<bool> is_merged(intervals.size(), false);
+    for (uint32_t i = 0; i < intervals.size(); ++i) {
         if (is_merged[i]) {
             continue;
         }
-        for (uint32_t j = 0; j < hills.size(); ++j) {
+        for (uint32_t j = 0; j < intervals.size(); ++j) {
             if (i != j && !is_merged[j] &&
-                hills[i].first < hills[j].second &&
-                hills[i].second > hills[j].first) {
+                intervals[i].first < intervals[j].second &&
+                intervals[i].second > intervals[j].first) {
 
                 is_merged[j] = true;
-                hills[i].first = std::min(hills[i].first, hills[j].first);
-                hills[i].second = std::max(hills[i].second, hills[j].second);
+                intervals[i].first = std::min(intervals[i].first, intervals[j].first);
+                intervals[i].second = std::max(intervals[i].second, intervals[j].second);
             }
         }
-        tmp.emplace_back(hills[i].first, hills[i].second);
+        tmp.emplace_back(intervals[i].first, intervals[i].second);
     }
-    hills.swap(tmp);
+    intervals.swap(tmp);
 }
 
 std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
@@ -103,8 +56,9 @@ std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
 }
 
 Pile::Pile(uint64_t id, uint32_t read_length)
-        : id_(id), begin_(0), end_(read_length), p10_(0), median_(0),
-        data_(end_ - begin_, 0), corrected_data_(), hills_() {
+        : id_(id), begin_(0), end_(read_length), b_(0), p10_(0), median_(0),
+        data_(end_ - begin_, 0), repeat_hills_(), chimeric_pits_(),
+        chimeric_hills_(), chimeric_hill_coverage_() {
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> Pile::find_slopes(double q) {
@@ -306,10 +260,6 @@ std::vector<std::pair<uint32_t, uint32_t>> Pile::find_slopes(double q) {
 
 void Pile::find_median() {
 
-    if (!corrected_data_.empty()) {
-        corrected_data_.swap(data_);
-    }
-
     std::vector<uint16_t> valid_data(data_.begin() + begin_, data_.begin() + end_);
 
     std::nth_element(valid_data.begin(), valid_data.begin() + valid_data.size() / 2,
@@ -319,10 +269,6 @@ void Pile::find_median() {
     std::nth_element(valid_data.begin(), valid_data.begin() + valid_data.size() / 10,
         valid_data.end());
     p10_ = valid_data[valid_data.size() / 10];
-
-    if (!corrected_data_.empty()) {
-        corrected_data_.swap(data_);
-    }
 }
 
 void Pile::add_layers(std::vector<uint32_t>& overlap_bounds) {
@@ -334,14 +280,14 @@ void Pile::add_layers(std::vector<uint32_t>& overlap_bounds) {
     std::sort(overlap_bounds.begin(), overlap_bounds.end());
 
     uint16_t coverage = 0;
-    uint32_t last_bound = 0;
+    uint32_t last_bound = begin_;
     for (const auto& bound: overlap_bounds) {
         if (coverage > 0) {
-            for (uint32_t i = last_bound; i < (bound >> 1); ++i) {
+            for (uint32_t i = last_bound; i < (bound >> 1) + begin_; ++i) {
                 data_[i] += coverage;
             }
         }
-        last_bound = bound >> 1;
+        last_bound = (bound >> 1) + begin_;
         if (bound & 1) {
             --coverage;
         } else {
@@ -358,7 +304,7 @@ bool Pile::shrink(uint32_t begin, uint32_t end) {
         exit(1);
     }
 
-    if (end - begin < 1000) {
+    if (end - begin < 1260) {
         return false;
     }
 
@@ -375,76 +321,15 @@ bool Pile::shrink(uint32_t begin, uint32_t end) {
     return true;
 }
 
-void Pile::correct(const std::vector<std::shared_ptr<Overlap>>& overlaps,
-    const std::vector<std::unique_ptr<Pile>>& piles) {
-
-    if (overlaps.empty()) {
-        return;
-    }
-
-    if (corrected_data_.empty()) {
-        corrected_data_ = data_;
-    }
-
-    for (const auto& it: overlaps) {
-
-        const auto& other = piles[(it->a_id() == id_ ? it->b_id() : it->a_id())];
-
-        if (other == nullptr) {
-            fprintf(stderr, "[rala::Pile::correct] error: missing other pile!\n");
-            exit(1);
-        }
-
-        uint32_t begin, end, other_begin, other_end;
-
-        if (it->a_id() == id_) {
-            begin = begin_ + it->a_begin();
-            end = begin_ + it->a_end();
-            other_begin = other->begin_ + it->b_begin();
-            other_end = other->begin_ + it->b_end();
-        } else {
-            begin = begin_ + it->b_begin();
-            end = begin_ + it->b_end();
-            other_begin = other->begin_ + it->a_begin();
-            other_end = other->begin_ + it->a_end();
-        }
-
-        if (begin < begin_ || begin >= end_ || end <= begin_ || end > end_) {
-            fprintf(stderr, "[rala::Pile::correct] error: "
-                "invalid begin, end coordinates!\n");
-            exit(1);
-        }
-        if (other_begin < other->begin_ || other_begin >= other->end_ ||
-            other_end <= other->begin_ || other_end > other->end_) {
-            fprintf(stderr, "[rala::Pile::correct] error: "
-                "invalid other begin, end coordinates!\n");
-            exit(1);
-        }
-
-        uint32_t correction_length = std::min(other_end - other_begin,
-            end - begin);
-
-        for (uint32_t i = 0; i < correction_length; ++i) {
-            if (it->orientation() == 0) {
-                corrected_data_[begin + i] = std::max(corrected_data_[begin + i],
-                    other->data_[other_begin + i]);
-            } else {
-                corrected_data_[begin + i] = std::max(corrected_data_[begin + i],
-                    other->data_[other_end - i - 1]);
-            }
-        }
-    }
-}
-
 bool Pile::find_valid_region() {
 
     uint32_t new_begin = 0, new_end = 0, current_begin = 0;
     bool found_begin = false;
     for (uint32_t i = begin_; i < end_; ++i) {
-        if (!found_begin && data_[i] >= 3) {
+        if (!found_begin && data_[i] >= 4) {
             current_begin = i;
             found_begin = true;
-        } else if (found_begin && data_[i] < 3) {
+        } else if (found_begin && data_[i] < 4) {
             if (i - current_begin > new_end - new_begin) {
                 new_begin = current_begin;
                 new_end = i;
@@ -462,134 +347,194 @@ bool Pile::find_valid_region() {
     return shrink(new_begin, new_end);
 }
 
-bool Pile::find_chimeric_regions(uint16_t dataset_median) {
+void Pile::find_chimeric_pits() {
 
-    // TODO: iterative chimeric detection?
-    if (median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, p10_);
-    }
-
-    // look for chimeric pits
-    auto slope_regions = find_slopes(1.817);
-
-    if (!slope_regions.empty()) {
-        auto is_chimeric_slope_region = [&](uint32_t begin, uint32_t end) -> bool {
-            for (uint32_t i = begin; i < end; ++i) {
-                if (data_[i] <= dataset_median / 2) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        uint32_t new_begin = 0, new_end = 0, last_slope = begin_;
-        for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
-            if (!(slope_regions[i].first & 1) && (slope_regions[i + 1].first & 1)) {
-                bool is_chimeric =
-                    (is_chimeric_slope_region(
-                        slope_regions[i].first >> 1,
-                        slope_regions[i].second + 1)) |
-                    (is_chimeric_slope_region(
-                        slope_regions[i + 1].first >> 1,
-                        slope_regions[i + 1].second + 1));
-
-                if (is_chimeric) {
-                    if ((slope_regions[i].first >> 1) - last_slope >
-                        new_end - new_begin) {
-
-                        new_begin = last_slope;
-                        new_end = slope_regions[i].first >> 1;
-                    }
-                    last_slope = slope_regions[i + 1].second;
-                }
-            }
-        }
-        if (end_ - last_slope > new_end - new_begin) {
-            new_begin = last_slope;
-            new_end = end_;
-        }
-        if (!shrink(new_begin, new_end)) {
-            return false;
-        }
-    }
-
-    // look for chimeric hills
-    slope_regions = find_slopes(1.3);
+    auto slope_regions = find_slopes(1.82);
     if (slope_regions.empty()) {
-        return true;
-    }
-
-    std::vector<std::pair<uint32_t, uint32_t>> chimeric_hills;
-    for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
-        if (!(slope_regions[i].first & 1)) {
-            continue;
-        }
-        bool found_hill = false;
-        for (uint32_t j = i + 1; j < slope_regions.size(); ++j) {
-            if (slope_regions[j].first & 1) {
-                if (found_hill) {
-                    break;
-                }
-                continue;
-            }
-            found_hill = true;
-            auto hill_type = hillType(slope_regions[i], slope_regions[j],
-                dataset_median, data_, begin_, end_);
-
-            if (hill_type == HillType::kChimeric) {
-                uint32_t begin = slope_regions[i].second - 0.126 *
-                    (slope_regions[i].second - (slope_regions[i].first >> 1));
-                uint32_t end = (slope_regions[j].first >> 1) + 0.126 *
-                    (slope_regions[j].second - (slope_regions[j].first >> 1));
-
-                chimeric_hills.emplace_back(std::max(begin_, begin),
-                    std::min(end_, end));
-            }
-        }
-    }
-
-    if (!chimeric_hills.empty()) {
-        hillMerge(chimeric_hills);
-
-        uint32_t new_begin = begin_, new_end = chimeric_hills.front().first;
-        for (uint32_t i = 0; i < chimeric_hills.size() - 1; ++i) {
-            if (chimeric_hills[i + 1].first - chimeric_hills[i].second >
-                new_end - new_begin) {
-
-                new_begin = chimeric_hills[i].second;
-                new_end = chimeric_hills[i + 1].first;
-            }
-        }
-        if (end_ - chimeric_hills.back().second > new_end - new_begin) {
-            new_begin = chimeric_hills.back().second;
-            new_end = end_;
-        }
-
-        return shrink(new_begin, new_end);
-    }
-
-    return true;
-}
-
-void Pile::find_repetitive_regions(uint16_t dataset_median) {
-
-    if (!corrected_data_.empty()) {
-        corrected_data_.swap(data_);
-    }
-
-    if (median_ > 1.42 * dataset_median) {
-        dataset_median = std::max(dataset_median, p10_);
-    }
-
-    auto slope_regions = find_slopes(1.3);
-    if (slope_regions.empty()) {
-        if (!corrected_data_.empty()) {
-            corrected_data_.swap(data_);
-        }
         return;
     }
 
-    std::vector<std::pair<uint32_t, uint32_t>> repeat_hills;
+    for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
+        if (!(slope_regions[i].first & 1) && (slope_regions[i + 1].first & 1)) {
+            chimeric_pits_.emplace_back(slope_regions[i].first >> 1,
+                slope_regions[i + 1].second);
+        }
+    }
+    intervalMerge(chimeric_pits_);
+}
+
+bool Pile::break_over_chimeric_pits(uint16_t dataset_median) {
+
+    auto is_chimeric_pit = [&](uint32_t begin, uint32_t end) -> bool {
+        for (uint32_t i = begin; i <= end; ++i) {
+            if (data_[i] * 2 <= dataset_median) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    uint32_t begin = 0, end = 0, last_begin = this->begin_;
+    std::vector<std::pair<uint32_t, uint32_t>> tmp;
+
+    for (const auto& it: chimeric_pits_) {
+        if (begin_ > it.first || end_ < it.second) {
+            continue;
+        }
+        if (is_chimeric_pit(it.first, it.second)) {
+            if (it.first - last_begin > end - begin) {
+                begin = last_begin;
+                end = it.first;
+            }
+            last_begin = it.second;
+        } else {
+            tmp.emplace_back(it);
+        }
+    }
+    if (this->end_ - last_begin > end - begin) {
+        begin = last_begin;
+        end = this->end_;
+    }
+
+    chimeric_pits_.swap(tmp);
+
+    return shrink(begin, end);
+}
+
+void Pile::find_chimeric_hills() {
+
+    auto slope_regions = find_slopes(1.3);
+    if (slope_regions.empty()) {
+        return;
+    }
+
+    auto is_chimeric_hill = [&](
+        const std::pair<uint32_t, uint32_t>& begin,
+        const std::pair<uint32_t, uint32_t>& end) -> bool {
+
+        if ((begin.first >> 1) < 0.05 * (this->end_ - this->begin_) + this->begin_ ||
+            end.second > 0.95 * (this->end_ - this->begin_) + this->begin_ ||
+            (end.first >> 1) - begin.second > 840) {
+            return false;
+        }
+
+        uint32_t peak_value = 1.3 * std::max(data_[begin.second],
+            data_[end.first >> 1]);
+
+        for (uint32_t i = begin.second + 1; i < (end.first >> 1); ++i) {
+            if (data_[i] > peak_value) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    uint32_t fuzz = 420;
+    for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
+        if (!(slope_regions[i].first & 1)) {
+            continue;
+        }
+
+        for (uint32_t j = i + 1; j < slope_regions.size(); ++j) {
+            if (slope_regions[j].first & 1) {
+                continue;
+            }
+
+            if (is_chimeric_hill(slope_regions[i], slope_regions[j])) {
+                uint32_t begin = (slope_regions[i].first >> 1) - this->begin_ > fuzz ?
+                    (slope_regions[i].first >> 1) - fuzz : this->begin_;
+                uint32_t end = this->end_ - slope_regions[j].second > fuzz ?
+                    slope_regions[j].second + fuzz : this->end_;
+                chimeric_hills_.emplace_back(begin, end);
+            }
+        }
+    }
+    intervalMerge(chimeric_hills_);
+
+    chimeric_hill_coverage_.resize(chimeric_hills_.size(), 0);
+}
+
+void Pile::check_chimeric_hills(const std::unique_ptr<Overlap>& overlap) {
+
+    uint32_t begin = overlap->a_id() == id_ ? overlap->a_begin() : overlap->b_begin();
+    uint32_t end = overlap->a_id() == id_ ? overlap->a_end() : overlap->b_end();
+
+    for (uint32_t i = 0; i < chimeric_hills_.size(); ++i) {
+        if (begin < chimeric_hills_[i].first && end > chimeric_hills_[i].second) {
+            ++chimeric_hill_coverage_[i];
+        }
+    }
+}
+
+bool Pile::break_over_chimeric_hills() {
+
+    uint32_t begin = 0, end = 0, last_begin = this->begin_;
+
+    for (uint32_t i = 0; i < chimeric_hills_.size(); ++i) {
+        if (begin_ > chimeric_hills_[i].first || end_ < chimeric_hills_[i].second) {
+            continue;
+        }
+        if (chimeric_hill_coverage_[i] > 3) {
+            continue;
+        }
+
+        if (chimeric_hills_[i].first - last_begin > end - begin) {
+            begin = last_begin;
+            end = chimeric_hills_[i].first;
+        }
+        last_begin = chimeric_hills_[i].second;
+    }
+    if (this->end_ - last_begin > end - begin) {
+        begin = last_begin;
+        end = this->end_;
+    }
+
+    std::vector<std::pair<uint32_t, uint32_t>>().swap(chimeric_hills_);
+    std::vector<uint32_t>().swap(chimeric_hill_coverage_);
+
+    return shrink(begin, end);
+}
+
+void Pile::find_repetitive_hills(uint16_t dataset_median) {
+
+    // TODO: remove?
+    if (median_ > 1.42 * dataset_median) {
+        dataset_median = std::max(dataset_median, p10_);
+    }
+
+    auto slope_regions = find_slopes(1.5);
+    if (slope_regions.empty()) {
+        return;
+    }
+
+    auto is_repeat_hill = [&](
+        const std::pair<uint32_t, uint32_t>& begin,
+        const std::pair<uint32_t, uint32_t>& end) -> bool {
+
+        if (((end.first >> 1) + end.second) / 2 -
+            ((begin.first >> 1) + begin.second) / 2 > 0.84 * (this->end_ - this->begin_)) {
+            return false;
+        }
+        bool found_peak = false;
+        uint32_t peak_value = 1.5 * std::max(data_[begin.second], data_[end.first >> 1]);
+        uint32_t valid_points = 0;
+        uint32_t min_value = dataset_median * 1.5;
+
+        for (uint32_t i = begin.second + 1; i < (end.first >> 1); ++i) {
+            if (data_[i] > min_value) {
+                ++valid_points;
+            }
+            if (data_[i] > peak_value) {
+                found_peak = true;
+            }
+        }
+
+        if (!found_peak || valid_points < 0.9 * ((end.first >> 1) - begin.second)) {
+            return false;
+        }
+        return true;
+    };
+
     for (uint32_t i = 0; i < slope_regions.size() - 1; ++i) {
         if (!(slope_regions[i].first & 1)) {
             continue;
@@ -597,38 +542,23 @@ void Pile::find_repetitive_regions(uint16_t dataset_median) {
         bool found_hill = false;
         for (uint32_t j = i + 1; j < slope_regions.size(); ++j) {
             if (slope_regions[j].first & 1) {
-                if (found_hill) {
-                    break;
-                }
                 continue;
             }
-            found_hill = true;
-            auto hill_type = hillType(slope_regions[i], slope_regions[j],
-                dataset_median, data_, begin_, end_);
 
-            if (hill_type == HillType::kRepeat) {
-                uint32_t begin = slope_regions[i].second - 0.336 *
-                    (slope_regions[i].second - (slope_regions[i].first >> 1));
-                uint32_t end = (slope_regions[j].first >> 1) + 0.336 *
-                    (slope_regions[j].second - (slope_regions[j].first >> 1));
-
-                repeat_hills.emplace_back(begin, end);
+            if (is_repeat_hill(slope_regions[i], slope_regions[j])) {
+                repeat_hills_.emplace_back(
+                    slope_regions[i].second - 0.336 *
+                        (slope_regions[i].second - (slope_regions[i].first >> 1)),
+                    (slope_regions[j].first >> 1) + 0.336 *
+                        (slope_regions[j].second - (slope_regions[j].first >> 1)));
             }
         }
     }
 
-    // store repetitive hills
-    hillMerge(repeat_hills);
-    for (const auto& it: repeat_hills) {
-        uint32_t hill_begin = std::max(begin_, it.first),
-            hill_end = std::min(end_, it.second);
-        if (hill_begin < hill_end) {
-            hills_.emplace_back(hill_begin, hill_end);
-        }
-    }
-
-    if (!corrected_data_.empty()) {
-        corrected_data_.swap(data_);
+    intervalMerge(repeat_hills_);
+    for (auto& it: repeat_hills_) {
+        it.first = std::max(begin_, it.first);
+        it.second = std::min(end_, it.second);
     }
 }
 
@@ -640,83 +570,26 @@ void Pile::add_repetitive_region(uint32_t begin, uint32_t end) {
         exit(1);
     }
 
-    hills_.emplace_back(begin, end);
-}
-
-void Pile::resolve_peculiar_regions() {
-
-    hillMerge(peculiars_);
-
-    auto interval_overlap = [](uint32_t xb, uint32_t xe, uint32_t yb, uint32_t ye) -> uint32_t {
-        if (ye < xb || xe < yb) {
-            return 0;
-        }
-        if (xb > yb) {
-            return ye - xb;
-        }
-        return xe - yb;
-    };
-
-    std::vector<std::pair<uint32_t, uint32_t>> tmp;
-    for (const auto& it: peculiars_) {
-        uint32_t l = interval_overlap(it.first, it.second, begin_, end_);
-        if (l == 0) {
-            continue;
-        }
-
-        uint32_t middle = (it.first + it.second) / 2;
-        if (l > 0.9 * (it.second - it.first)) {
-            tmp.emplace_back(it.first, middle);
-            tmp.emplace_back(middle, it.second);
-        } else {
-            uint32_t ll = interval_overlap(it.first, middle, begin_, end_);
-            if (ll == 0) {
-                continue;
-            }
-
-            uint32_t rl = interval_overlap(middle, it.second, begin_, end_);
-            if (rl == 0) {
-                continue;
-            }
-
-            if (ll > rl) {
-                tmp.emplace_back(middle, it.second);
-            } else {
-                tmp.emplace_back(it.first, middle);
-            }
-        }
-    }
-    tmp.swap(peculiars_);
-}
-
-void Pile::add_peculiar_region(uint32_t begin, uint32_t end) {
-
-    if (begin > data_.size() || end > data_.size()) {
-        fprintf(stderr, "[rala::Pile::add_peculiar_region] error: "
-            "[begin,end] out of bounds!\n");
-        exit(1);
-    }
-
-    peculiars_.emplace_back(begin, end);
+    repeat_hills_.emplace_back(begin, end);
 }
 
 bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
 
-    begin += begin_;
-    end += begin_;
-    uint32_t fuzz = 0.042 * (end_ - begin_);
+    begin += this->begin_;
+    end += this->begin_;
+    uint32_t fuzz = 420;
 
     auto check_hills = [&](const std::vector<std::pair<uint32_t, uint32_t>>& hills) -> bool {
         for (const auto& it: hills) {
             if (begin < it.second && it.first < end) {
-                if (it.first < 0.1 * (end_ - begin_) + begin_) {
+                if (it.first < 0.1 * (this->end_ - this->begin_) + this->begin_) {
                     // left hill
                     if (end < it.second + fuzz) {
                         return false;
                     }
-                } else if (it.second > 0.9 * (end_ - begin_) + begin_) {
+                } else if (it.second > 0.9 * (this->end_ - this->begin_) + this->begin_) {
                     // right hill
-                    if (begin > it.first - fuzz) {
+                    if (begin + fuzz > it.first) {
                         return false;
                     }
                 }
@@ -725,7 +598,7 @@ bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
         return true;
     };
 
-    return check_hills(hills_) & check_hills(peculiars_);
+    return check_hills(repeat_hills_);
 }
 
 std::string Pile::to_json() const {
@@ -742,33 +615,13 @@ std::string Pile::to_json() const {
     }
     ss << "],";
 
-    ss << "\"~y\":[";
-    for (uint32_t i = 0; i < corrected_data_.size(); ++i) {
-        ss << corrected_data_[i];
-        if (i < corrected_data_.size() - 1) {
-            ss << ",";
-        }
-    }
-    ss << "],";
-
     ss << "\"b\":" << begin_ << ",";
     ss << "\"e\":" << end_ << ",";
 
     ss << "\"h\":[";
-    for (uint32_t i = 0; i < hills_.size(); ++i) {
-        ss << hills_[i].first << "," << hills_[i].second;
-        if (i < hills_.size() - 1) {
-            ss << ",";
-        }
-    }
-
-    if (!hills_.empty() && !peculiars_.empty()) {
-        ss << ",";
-    }
-
-    for (uint32_t i = 0; i < peculiars_.size(); ++i) {
-        ss << peculiars_[i].first << "," << peculiars_[i].second;
-        if (i < peculiars_.size() - 1) {
+    for (uint32_t i = 0; i < repeat_hills_.size(); ++i) {
+        ss << repeat_hills_[i].first << "," << repeat_hills_[i].second;
+        if (i < repeat_hills_.size() - 1) {
             ss << ",";
         }
     }

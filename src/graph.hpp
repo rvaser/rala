@@ -38,16 +38,16 @@ public:
     ~Graph();
 
     /*!
-     * @brief Constructs the assembly graph by removing contained sequences and
-     * transitive overlaps (removes chimeric and repetitive sequences before
-     * construction if flag is set)
+     * @brief Constructs the assembly graph by breaking chimeric sequences and
+     * removing contained sequences (if path is provided, overlaps between
+     * repetitive sequences are removed)
      */
-    void construct(bool preprocess = true);
+    void construct(const std::string& repeat_overlaps_path);
 
     /*!
      * @brief Removes transitive edges and tips, pops bubbles
      */
-    void simplify(const std::string& debug_prefix);
+    void simplify();
 
     /*!
      * @brief Removes transitive edge (no information loss)
@@ -76,8 +76,6 @@ public:
      */
     uint32_t create_unitigs();
 
-    void resolve_repeats(const std::string& path);
-
     /*!
      * @brief Stores all contigs into dst
      */
@@ -87,20 +85,22 @@ public:
     /*!
      * @brief Prints assembly graph in csv format
      */
-    void print_csv(std::string path) const;
+    void print_csv(const std::string& path) const;
 
     /*!
      * @brief Prints assembly graph in GFA format
      */
-    void print_gfa(std::string path) const;
+    void print_gfa(const std::string& path) const;
 
     /*!
      * @brief Prints all unresolved graph junctions in JSON format (plottable
      * with misc/plotter.py)
      */
-    void print_json(std::string path) const;
+    void print_json(const std::string& path) const;
 
-    void print_fastq(std::string path) const;
+    void print_fasta(const std::string& path) const;
+
+    void print_debug(const std::string& prefix) const;
 
     friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);
@@ -117,10 +117,16 @@ private:
     void initialize();
 
     /*!
-     * @brief Splits chimeric sequences and removes overlaps between sequences
-     * that do not bridge repetitive genomic regions
+     * @brief Cleanses chimeric sequences
      */
-    void preprocess();
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        std::vector<std::unique_ptr<Overlap>>& internals);
+
+    /*!
+     * @brief Removes overlaps between repetitive sequences
+     */
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        const std::string& path);
 
     uint64_t find_edge(uint64_t src, uint64_t dst);
 

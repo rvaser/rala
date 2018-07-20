@@ -66,11 +66,9 @@ int main(int argc, char** argv) {
     }
 
     auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
-    graph->construct(false);
-    graph->simplify(debug_prefix);
-    if (!repeat_overlaps_path.empty()) {
-        graph->resolve_repeats(repeat_overlaps_path);
-    }
+    graph->construct(repeat_overlaps_path);
+    graph->simplify();
+    graph->print_debug(debug_prefix);
 
     std::vector<std::unique_ptr<rala::Sequence>> contigs;
     graph->extract_contigs(contigs, drop_unassembled_sequences);

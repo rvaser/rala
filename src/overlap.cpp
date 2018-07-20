@@ -16,7 +16,7 @@ Overlap::Overlap(uint64_t a_id, uint64_t b_id, double, uint32_t,
         a_length_(a_length), b_name_(), b_id_(b_id - 1), b_begin_(b_begin),
         b_end_(b_end), b_length_(b_length), length_(std::max(a_end - a_begin,
         b_end - b_begin)), orientation_(a_rc == b_rc ? 0 : 1),
-        is_transmuted_(false) {
+        is_transmuted_(false), is_valid_(true) {
 }
 
 Overlap::Overlap(const char* a_name, uint32_t a_name_length,
@@ -27,7 +27,7 @@ Overlap::Overlap(const char* a_name, uint32_t a_name_length,
         a_end_(a_end), a_length_(a_length), b_name_(b_name, b_name_length),
         b_id_(), b_begin_(b_begin), b_end_(b_end), b_length_(b_length),
         length_(overlap_length), orientation_(orientation == '+' ? 0 : 1),
-        is_transmuted_(false) {
+        is_transmuted_(false), is_valid_(true) {
 }
 
 Overlap::~Overlap() {
@@ -103,47 +103,57 @@ bool Overlap::trim(const std::vector<std::unique_ptr<Pile>>& piles) {
         exit(1);
     }
 
-    if (a_begin_ >= pile_a->end() || a_end_ <= pile_a->begin()) {
-        return false;
-    }
-    if (b_begin_ >= pile_b->end() || b_end_ <= pile_b->begin()) {
-        return false;
-    }
-
-    uint32_t a_new_begin = a_begin_ + (b_begin_ < pile_b->begin() ?
-        pile_b->begin() - b_begin_ : 0);
-    uint32_t a_new_end = a_end_ - (b_end_ > pile_b->end() ?
-        b_end_ - pile_b->end() : 0);
-    if (a_new_begin >= pile_a->end() || a_new_end <= pile_a->begin()) {
+    if (this->a_begin_ >= pile_a->end() || this->a_end_ <= pile_a->begin() ||
+        this->b_begin_ >= pile_b->end() || this->b_end_ <= pile_b->begin()) {
         return false;
     }
 
-    uint32_t b_new_begin = b_begin_ + (a_begin_ < pile_a->begin() ?
-        pile_a->begin() - a_begin_ : 0);
-    uint32_t b_new_end = b_end_ - (a_end_ > pile_a->end() ?
-        a_end_ - pile_a->end() : 0);
-    if (b_new_begin >= pile_b->end() || b_new_end <= pile_b->begin()) {
+    uint32_t a_begin, a_end, b_begin, b_end;
+
+    if (orientation_) {
+        a_begin = this->a_begin_ +
+            (this->b_end_ > pile_b->end() ? this->b_end_ - pile_b->end() : 0);
+        a_end = this->a_end_ -
+            (this->b_begin_ < pile_b->begin() ? pile_b->begin() - this->b_begin_ : 0);
+        b_begin = this->b_begin_ +
+            (this->a_end_ > pile_a->end() ? this->a_end_ - pile_a->end() : 0);
+        b_end = this->b_end_ -
+            (this->a_begin_ < pile_a->begin() ? pile_a->begin() - this->a_begin_ : 0);
+    } else {
+        a_begin = this->a_begin_ +
+            (this->b_begin_ < pile_b->begin() ? pile_b->begin() - this->b_begin_ : 0);
+        a_end = this->a_end_ -
+            (this->b_end_ > pile_b->end() ? this->b_end_ - pile_b->end() : 0);
+        b_begin = this->b_begin_ +
+            (this->a_begin_ < pile_a->begin() ? pile_a->begin() - this->a_begin_ : 0);
+        b_end = this->b_end_ -
+            (this->a_end_ > pile_a->end() ? this->a_end_ - pile_a->end() : 0);
+    }
+
+    if (a_begin >= pile_a->end() || a_end <= pile_a->begin() ||
+        b_begin >= pile_b->end() || b_end <= pile_b->begin()) {
         return false;
     }
 
-    a_new_begin = std::max(a_new_begin, pile_a->begin()) - pile_a->begin();
-    a_new_end = std::min(a_new_end, pile_a->end()) - pile_a->begin();
-    b_new_begin = std::max(b_new_begin, pile_b->begin()) - pile_b->begin();
-    b_new_end = std::min(b_new_end, pile_b->end()) - pile_b->begin();
+    a_begin = std::max(a_begin, pile_a->begin()) - pile_a->begin();
+    a_end = std::min(a_end, pile_a->end()) - pile_a->begin();
+    b_begin = std::max(b_begin, pile_b->begin()) - pile_b->begin();
+    b_end = std::min(b_end, pile_b->end()) - pile_b->begin();
 
-    if (a_new_begin >= a_new_end || b_new_begin >= b_new_end) {
+    if (a_begin >= a_end || a_end - a_begin < 84 ||
+        b_begin >= b_end || b_end - b_begin < 84) {
         return false;
     }
 
-    a_begin_ = a_new_begin;
-    a_end_ = a_new_end;
+    this->a_begin_ = a_begin;
+    this->a_end_ = a_end;
     a_length_ = pile_a->end() - pile_a->begin();
 
-    b_begin_ = b_new_begin;
-    b_end_ = b_new_end;
+    this->b_begin_ = b_begin;
+    this->b_end_ = b_end;
     b_length_ = pile_b->end() - pile_b->begin();
 
-    length_ = std::max(a_end_ - a_begin_, b_end_ - b_begin_);
+    length_ = std::max(a_end - a_begin, b_end - b_begin);
 
     return true;
 }

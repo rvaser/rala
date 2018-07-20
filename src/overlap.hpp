@@ -75,6 +75,14 @@ public:
         return orientation_;
     }
 
+    bool is_valid() const {
+        return is_valid_;
+    }
+
+    void set_invalid() {
+        is_valid_ = false;
+    }
+
     bool transmute(const std::vector<std::unique_ptr<Pile>>& piles,
         const std::unordered_map<std::string, uint64_t>& name_to_id);
 
@@ -110,6 +118,7 @@ private:
     uint32_t length_;
     uint32_t orientation_;
     bool is_transmuted_;
+    bool is_valid_;
 };
 
 }

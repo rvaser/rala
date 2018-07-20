@@ -103,7 +103,7 @@ public:
 class Graph::Edge {
 public:
     // Overlap encapsulatipn
-    Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length);
+    Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length, bool is_valid);
     Edge(const Edge&) = delete;
     const Edge& operator=(const Edge&) = delete;
 
@@ -118,6 +118,7 @@ public:
     Node* end_node_;
     uint32_t length_;
     bool is_marked_;
+    bool is_valid_;
     Edge* pair_;
 };
 
@@ -171,9 +172,9 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node)
 Graph::Node::~Node() {
 }
 
-Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length)
+Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length, bool is_valid)
         : id_(id), begin_node_(begin_node), end_node_(end_node), length_(length),
-        is_marked_(false), pair_() {
+        is_marked_(false), is_valid_(is_valid), pair_() {
 }
 
 Graph::Edge::~Edge() {
@@ -272,20 +273,13 @@ void Graph::initialize() {
                 continue;
             }
             if (overlaps[i]->a_id() == overlaps[i]->b_id()) {
-                if (overlaps[i]->a_begin() == overlaps[i]->b_begin() &&
-                    overlaps[i]->a_end() == overlaps[i]->b_end()) {
-                    // possible selfmeric
-                    piles_[overlaps[i]->a_id()]->add_peculiar_region(
-                        overlaps[i]->a_begin(), overlaps[i]->a_end());
-                } else {
-                    // repeat
-                    // TODO: treat tandem and normal repeats differently?
-                    // if (overlaps[i]->a_begin() < overlaps[i]->b_end() &&
-                    //     overlaps[i]->b_begin() < overlaps[i]->a_end()) {
-                    piles_[overlaps[i]->a_id()]->add_repetitive_region(
-                        std::min(overlaps[i]->a_begin(), overlaps[i]->b_begin()),
-                        std::max(overlaps[i]->a_end(), overlaps[i]->b_end()));
-                }
+                // repeat
+                // TODO: treat tandem and normal repeats differently?
+                // if (overlaps[i]->a_begin() < overlaps[i]->b_end() &&
+                //     overlaps[i]->b_begin() < overlaps[i]->a_end()) {
+                // piles_[overlaps[i]->a_id()]->add_repetitive_region(
+                //     std::min(overlaps[i]->a_begin(), overlaps[i]->b_begin()),
+                //     std::max(overlaps[i]->a_end(), overlaps[i]->b_end()));
                 is_valid_overlap_[num_overlaps + i] = false;
                 //overlaps[i].reset();
                 continue;
@@ -337,9 +331,9 @@ void Graph::initialize() {
 
         uint64_t c = 0;
         for (uint64_t i = l; i < overlaps.size(); ++i) {
-            if (!overlaps[i]->transmute(piles_, name_to_id_)) {
-                is_valid_overlap_[num_overlaps + i] = false;
+            if (overlaps[i]->transmute(piles_, name_to_id_) == false) {
                 overlaps[i].reset();
+                is_valid_overlap_[num_overlaps + i] = false;
                 continue;
             }
 
@@ -386,7 +380,6 @@ void Graph::initialize() {
 
     fprintf(stderr, "[rala::Graph::initialize] loaded overlaps\n");
 
-    // find coverage median of the dataset
     std::vector<std::future<void>> thread_futures;
     for (const auto& it: piles_) {
         if (it == nullptr) {
@@ -394,63 +387,14 @@ void Graph::initialize() {
         }
 
         thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t i) -> void {
-                piles_[i]->find_median();
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    std::vector<uint16_t> medians;
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-        medians.emplace_back(it->median());
-    }
-
-    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
-        medians.end());
-    coverage_median_ = medians[medians.size() / 2];
-
-    fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
-        coverage_median_);
-
-    // find chimeric reads
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t j) -> void {
-                if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
-                    piles_[j].reset();
-                } else {
-                    piles_[j]->resolve_peculiar_regions();
-                }
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
-
-    // trim reads
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
             [&](uint64_t i) -> void {
-                if (!piles_[i]->find_valid_region()) {
+                if (piles_[i]->find_valid_region() == false) {
                     piles_[i].reset();
-                };
+                } else {
+                    piles_[i]->find_median();
+                    piles_[i]->find_chimeric_hills();
+                    piles_[i]->find_chimeric_pits();
+                }
             }, it->id()));
     }
     for (const auto& it: thread_futures) {
@@ -477,139 +421,7 @@ void Graph::initialize() {
     timer.print("[rala::Graph::initialize] elapsed time =");
 }
 
-void Graph::preprocess() {
-
-    Timer timer;
-    timer.start();
-
-    // TODO: use low quaility filtering?
-    // filter low quality reads
-    /*uint32_t num_low_quality_reads = 0;
-    for (auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-        if (it->median() * 2 < coverage_median_) {
-            it.reset();
-            ++num_low_quality_reads;
-        }
-    }
-    fprintf(stderr, "[rala::Graph::preprocess] number of low quality reads = %u\n",
-        num_low_quality_reads);
-    */
-
-    // correct piles
-    std::vector<std::future<void>> thread_futures;
-
-    oparser_->reset();
-    while (true) {
-        std::vector<std::vector<std::shared_ptr<Overlap>>> distributed_overlaps(piles_.size());
-
-        std::vector<std::shared_ptr<Overlap>> overlaps;
-        auto status = oparser_->parse_objects(overlaps, kChunkSize);
-
-        for (uint64_t i = 0; i < overlaps.size(); ++i) {
-            auto& it = overlaps[i];
-            if (!it->transmute(piles_, name_to_id_) || !it->trim(piles_)) {
-                it.reset();
-                continue;
-            }
-
-            auto absolute_difference = [](uint32_t a, uint32_t b) -> uint32_t {
-                return a > b ? (a - b) : (b - a);
-            };
-
-            uint32_t correction_length = std::min(it->a_end() - it->a_begin(),
-                it->b_end() - it->b_begin());
-
-            if (absolute_difference(it->a_end() - it->a_begin(), it->b_end() -
-                it->b_begin()) > correction_length * 0.01) {
-                it.reset();
-                continue;
-            }
-
-            distributed_overlaps[it->a_id()].emplace_back(it);
-            distributed_overlaps[it->b_id()].emplace_back(it);
-        }
-
-        for (const auto& it: piles_) {
-            if (it == nullptr) {
-                continue;
-            }
-
-            thread_futures.emplace_back(thread_pool_->submit_task(
-                [&](uint64_t i) -> void {
-                    piles_[i]->correct(distributed_overlaps[i], piles_);
-                    std::vector<std::shared_ptr<Overlap>>().swap(distributed_overlaps[i]);
-                }, it->id()));
-        }
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-        thread_futures.clear();
-
-        if (!status) {
-            fprintf(stderr, "[rala::Graph::preprocess] loaded overlaps\n");
-            fprintf(stderr, "[rala::Graph::preprocess] corrected piles\n");
-
-            // update coverage medians
-            for (const auto& it: piles_) {
-                if (it == nullptr) {
-                    continue;
-                }
-
-                thread_futures.emplace_back(thread_pool_->submit_task(
-                    [&](uint64_t i) -> void {
-                        piles_[i]->find_median();
-                    }, it->id()));
-            }
-            for (const auto& it: thread_futures) {
-                it.wait();
-            }
-            thread_futures.clear();
-
-            std::vector<uint16_t> medians;
-            for (const auto& it: piles_) {
-                if (it == nullptr) {
-                    continue;
-                }
-                medians.emplace_back(it->median());
-            }
-
-            std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
-                medians.end());
-            coverage_median_ = medians[medians.size() / 2];
-
-            fprintf(stderr, "[rala::Graph::preprocess] dataset coverage median = %u\n",
-                coverage_median_);
-
-            break;
-        }
-    }
-
-    // find repetitive regions
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t i) -> void {
-                piles_[i]->find_repetitive_regions(coverage_median_);
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    fprintf(stderr, "[rala::Graph::preprocess] processed repetitive sequences\n");
-
-    timer.stop();
-    timer.print("[rala::Graph::preprocess] elapsed time =");
-}
-
-void Graph::construct(bool preprocess) {
+void Graph::construct(const std::string& repeat_overlaps_path) {
 
     if (!piles_.empty()) {
         fprintf(stderr, "[rala::Graph::construct] warning: "
@@ -618,15 +430,12 @@ void Graph::construct(bool preprocess) {
     }
 
     initialize();
-    if (preprocess) {
-        this->preprocess();
-    }
 
     Timer timer;
     timer.start();
 
     // store overlaps
-    std::vector<std::unique_ptr<Overlap>> overlaps;
+    std::vector<std::unique_ptr<Overlap>> overlaps, internals;
     uint64_t num_overlaps = 0;
 
     oparser_->reset();
@@ -636,25 +445,36 @@ void Graph::construct(bool preprocess) {
 
         for (uint64_t i = l; i < overlaps.size(); ++i) {
             auto& it = overlaps[i];
-            if (!is_valid_overlap_[num_overlaps + i - l] ||
-                !it->transmute(piles_, name_to_id_) ||
-                !it->trim(piles_)) {
-
+            if (is_valid_overlap_[num_overlaps + i - l] == false ||
+                it->transmute(piles_, name_to_id_) == false ||
+                it->trim(piles_) == false) {
                 it.reset();
                 continue;
             }
 
+            if (piles_[it->a_id()]->has_chimeric_hill()) {
+                piles_[it->a_id()]->check_chimeric_hills(it);
+            }
+            if (piles_[it->b_id()]->has_chimeric_hill()) {
+                piles_[it->b_id()]->check_chimeric_hills(it);
+            }
+
             switch (it->type()) {
                 case OverlapType::kX:
-                    it.reset();
+                    internals.emplace_back(std::move(it));
+                    //it.reset();
                     break;
                 case OverlapType::kB:
-                    piles_[it->a_id()].reset();
-                    it.reset();
+                    if (piles_[it->b_id()]->has_chimeric_region() == false) {
+                        piles_[it->a_id()].reset();
+                        it.reset();
+                    }
                     break;
                 case OverlapType::kA:
-                    piles_[it->b_id()].reset();
-                    it.reset();
+                    if (piles_[it->a_id()]->has_chimeric_region() == false) {
+                        piles_[it->b_id()].reset();
+                        it.reset();
+                    }
                     break;
                 default:
                     break;
@@ -662,13 +482,6 @@ void Graph::construct(bool preprocess) {
 
             if (it == nullptr) {
                 continue;
-            }
-
-            // check for false overlaps
-            if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
-                !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
-
-                it.reset();
             }
         }
         num_overlaps += overlaps.size() - l;
@@ -689,11 +502,23 @@ void Graph::construct(bool preprocess) {
             }
             shrinkToFit(overlaps, 0);
 
+            for (auto& it: internals) {
+                if (piles_[it->a_id()] == nullptr ||
+                    piles_[it->b_id()] == nullptr) {
+
+                    it.reset();
+                }
+            }
+            shrinkToFit(internals, 0);
+
             break;
         }
     }
 
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
+
+    preprocess(overlaps, internals);
+    preprocess(overlaps, repeat_overlaps_path);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -758,10 +583,10 @@ void Graph::construct(bool preprocess) {
 
         if (it->type() == OverlapType::kAB) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_a, node_b,
-                a_begin - b_begin));
+                a_begin - b_begin, it->is_valid()));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_b->pair_, node_a->pair_, (it->b_length() - b_end) -
-                (it->a_length() - a_end)));
+                (it->a_length() - a_end), it->is_valid()));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -776,10 +601,10 @@ void Graph::construct(bool preprocess) {
 
         } else if (it->type() == OverlapType::kBA) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
-                b_begin - a_begin));
+                b_begin - a_begin, it->is_valid()));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_a->pair_, node_b->pair_, (it->a_length() - a_end) -
-                (it->b_length() - b_end)));
+                (it->b_length() - b_end), it->is_valid()));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -804,7 +629,7 @@ void Graph::construct(bool preprocess) {
     timer.print("[rala::Graph::construct] elapsed time =");
 }
 
-void Graph::simplify(const std::string& debug_prefix) {
+void Graph::simplify() {
 
     Timer timer;
     timer.start();
@@ -828,26 +653,32 @@ void Graph::simplify(const std::string& debug_prefix) {
         }
     }
 
-    if (!debug_prefix.empty()) {
-        print_csv(debug_prefix + "_graph.csv");
-        print_json(debug_prefix + "_knots.json");
-        print_fastq(debug_prefix + "_knots.fasta");
+    for (auto& it: edges_) {
+        if (it == nullptr) {
+            continue;
+        }
+        if (it->is_valid_ == false) {
+            it->is_marked_ = true;
+            it->pair_->is_marked_ = true;
+            marked_edges_.emplace(it->id_);
+            marked_edges_.emplace(it->pair_->id_);
+        }
     }
+    remove_marked_objects();
 
-    // TODO: try to avoid removal of long edges!
-    // uint32_t num_long_edges = remove_long_edges();
+    while (true) {
+        uint32_t num_changes = remove_tips();
+        num_tips += num_changes;
+        num_changes += num_changes;
 
-    /*while (true) {
-        uint32_t num_changes = create_unitigs();
-
-        uint32_t num_changes_part = remove_tips();
-        num_tips += num_changes_part;
+        uint32_t num_changes_part = remove_bubbles();
+        num_bubbles += num_changes_part;
         num_changes += num_changes_part;
 
         if (num_changes == 0) {
             break;
         }
-    }*/
+    }
 
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
@@ -855,13 +686,200 @@ void Graph::simplify(const std::string& debug_prefix) {
         num_tips);
     fprintf(stderr, "[rala::Graph::simplify] number of bubbles = %u\n",
         num_bubbles);
-    // fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
-    //     num_long_edges);
+
     timer.stop();
     timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
-void Graph::resolve_repeats(const std::string& path) {
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    std::vector<std::unique_ptr<Overlap>>& internals) {
+
+    Timer timer;
+    timer.start();
+
+    std::vector<std::future<void>> thread_futures;
+    for (const auto& it: piles_) {
+        if (it == nullptr) {
+            continue;
+        }
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint64_t i) -> void {
+                piles_[i]->update_b();
+                if (piles_[i]->has_chimeric_hill() &&
+                    piles_[i]->break_over_chimeric_hills() == false) {
+                    piles_[i].reset();
+                }
+            }, it->id()));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
+
+    for (auto& it: overlaps) {
+        if (it->trim(piles_) == false) {
+            it.reset();
+            continue;
+        }
+    }
+    shrinkToFit(overlaps, 0);
+
+    for (auto& it: internals) {
+        if (it->trim(piles_) == false) {
+            it.reset();
+            continue;
+        }
+    }
+    shrinkToFit(internals, 0);
+
+    while (true) {
+
+        std::vector<std::vector<uint64_t>> connections(piles_.size());
+        for (const auto& it: overlaps) {
+            connections[it->a_id()].emplace_back(it->b_id());
+            connections[it->b_id()].emplace_back(it->a_id());
+        }
+
+        std::vector<std::vector<uint64_t>> components;
+        std::vector<bool> is_visited(piles_.size(), false);
+        for (uint64_t i = 0; i < connections.size(); ++i) {
+            if (connections[i].empty() || is_visited[i]) {
+                continue;
+            }
+
+            components.resize(components.size() + 1);
+
+            std::deque<uint64_t> que = { i };
+            while (!que.empty()) {
+                uint64_t j = que.front();
+                que.pop_front();
+
+                if (is_visited[j]) {
+                    continue;
+                }
+                is_visited[j] = true;
+                components.back().emplace_back(j);
+
+                for (const auto& it: connections[j]) {
+                    que.emplace_back(it);
+                }
+                std::vector<uint64_t>().swap(connections[j]);
+            }
+        }
+        std::vector<std::vector<uint64_t>>().swap(connections);
+        std::vector<bool>().swap(is_visited);
+
+        for (auto& it: piles_) {
+            if (it == nullptr) {
+                continue;
+            }
+            it->update_b();
+        }
+
+        for (const auto& component: components) {
+
+            std::vector<uint16_t> medians;
+            for (const auto& it: component) {
+                medians.emplace_back(piles_[it]->median());
+            }
+            std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+                medians.end());
+            uint16_t component_median = medians[medians.size() / 2];
+
+            for (const auto& it: component) {
+                thread_futures.emplace_back(thread_pool_->submit_task(
+                    [&](uint64_t i) -> void {
+                        if (piles_[i]->break_over_chimeric_pits(component_median) == false) {
+                            piles_[i].reset();
+                        }
+                    }, it));
+            }
+            for (const auto& it: thread_futures) {
+                it.wait();
+            }
+            thread_futures.clear();
+        }
+
+        bool is_changed = false;
+
+        for (auto& it: overlaps) {
+            if (it->trim(piles_) == false) {
+                it.reset();
+                is_changed = true;
+            }
+        }
+        shrinkToFit(overlaps, 0);
+
+        for (auto& it: internals) {
+            if (it->trim(piles_) == false) {
+                it.reset();
+                continue;
+            }
+
+            switch (it->type()) {
+                case OverlapType::kAB:
+                case OverlapType::kBA:
+                    overlaps.emplace_back(std::move(it));
+                    break;
+                default:
+                    break;
+            }
+        }
+        shrinkToFit(internals, 0);
+
+        if (is_changed == false) {
+            break;
+        }
+    }
+
+    for (auto& it: overlaps) {
+        switch (it->type()) {
+            case OverlapType::kA:
+                piles_[it->b_id()].reset();
+                it.reset();
+                break;
+            case OverlapType::kB:
+                piles_[it->a_id()].reset();
+                it.reset();
+                break;
+            default:
+                break;
+        }
+    }
+    for (auto& it: internals) {
+        switch (it->type()) {
+            case OverlapType::kA:
+                piles_[it->b_id()].reset();
+                it.reset();
+                break;
+            case OverlapType::kB:
+                piles_[it->a_id()].reset();
+                it.reset();
+                break;
+            default:
+                break;
+        }
+    }
+    for (auto& it: overlaps) {
+        if (it == nullptr) {
+            continue;
+        }
+        if (piles_[it->a_id()] == nullptr || piles_[it->b_id()] == nullptr) {
+            it.reset();
+        }
+    }
+    shrinkToFit(overlaps, 0);
+
+    timer.stop();
+    timer.print("[rala::Graph::preprocess] elapsed time =");
+}
+
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    const std::string& path) {
+
+    /*if (path.empty()) {
+        return;
+    }
 
     std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
 
@@ -877,109 +895,129 @@ void Graph::resolve_repeats(const std::string& path) {
     } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
         oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
     } else {
-        fprintf(stderr, "[rala::resolve_repeats] error: "
+        fprintf(stderr, "[rala::preprocess] error: "
             "file %s has unsupported format extension (valid extensions: "
             ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
         exit(1);
     }
 
-    std::unordered_set<uint64_t> node_ids;
+    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
+    oparser->parse_objects(sensitive_overlaps, -1);
 
-    for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc() || !it->is_junction()) {
+    std::unordered_set<uint64_t> sequence_ids;
+    for (const auto& it: sensitive_overlaps) {
+        sequence_ids.emplace(atoi(it->b_name_.c_str()));
+    }
+
+    std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
+    uint64_t num_sequences = 0;
+    for (const auto& it: sequence_ids) {
+        sequence_id_to_id[it] = num_sequences++;
+        if (piles_[it] == nullptr) {
+            fprintf(stderr, "[rala::preprocess] error: missing pile!\n");
+            exit(1);
+        }
+        piles_[it]->clear();
+    }
+
+    std::vector<std::vector<uint32_t>> overlap_bounds(num_sequences);
+    for (const auto& it: sensitive_overlaps) {
+        uint32_t sequence_id = atoi(it->b_name_.c_str());
+        overlap_bounds[sequence_id_to_id[sequence_id]].emplace_back(
+            (it->b_begin() + 1) << 1);
+        overlap_bounds[sequence_id_to_id[sequence_id]].emplace_back(
+            (it->b_end() - 1) << 1 | 1);
+    }
+
+    for (const auto& it: sequence_ids) {
+        piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
+        piles_[it]->find_valid_region();
+        piles_[it]->find_median();
+    }*/
+
+    std::vector<std::vector<uint64_t>> connections(piles_.size());
+    for (const auto& it: overlaps) {
+        connections[it->a_id()].emplace_back(it->b_id());
+        connections[it->b_id()].emplace_back(it->a_id());
+    }
+
+    std::vector<std::vector<uint64_t>> components;
+    std::vector<bool> is_visited(piles_.size(), false);
+    for (uint64_t i = 0; i < connections.size(); ++i) {
+        if (connections[i].empty() || is_visited[i]) {
             continue;
         }
 
-        node_ids.emplace(it->id_);
+        components.resize(components.size() + 1);
 
-        for (const auto& edge: it->prefix_edges_) {
-            if (edge->begin_node_->is_rc()) {
-                node_ids.emplace(edge->begin_node_->pair_->id_);
-            } else {
-                node_ids.emplace(edge->begin_node_->id_);
+        std::deque<uint64_t> que = { i };
+        while (!que.empty()) {
+            uint64_t j = que.front();
+            que.pop_front();
+
+            if (is_visited[j]) {
+                continue;
             }
-        }
-        for (const auto& edge: it->suffix_edges_) {
-            if (edge->end_node_->is_rc()) {
-                node_ids.emplace(edge->end_node_->pair_->id_);
-            } else {
-                node_ids.emplace(edge->end_node_->id_);
+            is_visited[j] = true;
+            components.back().emplace_back(j);
+
+            for (const auto& it: connections[j]) {
+                que.emplace_back(it);
             }
+            std::vector<uint64_t>().swap(connections[j]);
         }
     }
+    std::vector<std::vector<uint64_t>>().swap(connections);
+    std::vector<bool>().swap(is_visited);
 
-    std::unordered_map<uint64_t, uint64_t> node_id_to_pile_id;
-    std::vector<std::unique_ptr<Pile>> piles;
-    uint64_t num_nodes = 0;
-    for (const auto& it: node_ids) {
-        piles.emplace_back(createPile(it, nodes_[it]->data_.size()));
-        node_id_to_pile_id[it] = num_nodes;
-        ++num_nodes;
+    std::vector<std::future<void>> thread_futures;
+    for (const auto& component: components) {
+
+        std::vector<uint16_t> medians;
+        for (const auto& it: component) {
+            medians.emplace_back(piles_[it]->median());
+        }
+        std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
+            medians.end());
+        uint16_t component_median = medians[medians.size() / 2];
+
+        for (const auto& it: component) {
+            //if (sequence_ids.find(it) != sequence_ids.end()) {
+                thread_futures.emplace_back(thread_pool_->submit_task(
+                    [&](uint64_t i) -> void {
+                        piles_[i]->find_repetitive_hills(component_median);
+                    }, it));
+            //}
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
     }
 
-    std::vector<std::unique_ptr<Overlap>> overlaps;
-    oparser->parse_objects(overlaps, -1);
-
-    std::vector<std::vector<uint32_t>> overlap_bounds(piles_.size());
-    for (const auto& it: overlaps) {
-        uint32_t node_id = atoi(it->b_name_.c_str());
-        overlap_bounds[node_id_to_pile_id[node_id]].emplace_back((it->b_begin() + 1) << 1);
-        overlap_bounds[node_id_to_pile_id[node_id]].emplace_back((it->b_end() - 1) << 1 | 1);
+    for (auto& it: overlaps) {
+        if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
+            !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
+            //it->set_invalid();
+            it.reset();
+        }
     }
+    shrinkToFit(overlaps, 0);
 
-    std::vector<uint32_t> medians;
-    for (auto& it: piles) {
-        it->add_layers(overlap_bounds[node_id_to_pile_id[it->id()]]);
-        it->find_median();
-        medians.emplace_back(it->median());
-    }
-
-    std::nth_element(medians.begin(), medians.begin() + medians.size() / 2,
-        medians.end());
-    coverage_median_ = medians[medians.size() / 2];
-    fprintf(stderr, "[rala::Graph::resolve_repeats] repeat coverage median = %u\n",
-        coverage_median_);
-
-    std::ofstream os("debug.json");
+    /*std::ofstream os("ripits.json");
     os << "{\"piles\":{";
     bool is_first = true;
 
-    for (auto& it: piles) {
-        it->find_repetitive_regions(coverage_median_);
-
+    for (const auto& it: sequence_ids) {
         if (!is_first) {
             os << ",";
         }
         is_first = false;
-        os << it->to_json();
-
-        const auto& node = nodes_[it->id()];
-        for (const auto& edge: node->suffix_edges_) {
-            if (!it->is_valid_overlap(edge->length_, node->data_.size())) {
-                edge->is_marked_ = true;
-                edge->pair_->is_marked_ = true;
-                marked_edges_.emplace(edge->id_);
-                marked_edges_.emplace(edge->pair_->id_);
-            }
-        }
-        for (const auto& edge: node->prefix_edges_) {
-            if (!it->is_valid_overlap(0, edge->begin_node_->data_.size() - edge->length_)) {
-                edge->is_marked_ = true;
-                edge->pair_->is_marked_ = true;
-                marked_edges_.emplace(edge->id_);
-                marked_edges_.emplace(edge->pair_->id_);
-            }
-        }
+        os << piles_[it]->to_json();
     }
 
     os << "}}";
-    os.close();
-
-    remove_marked_objects();
-    remove_bubbles();
-    remove_tips();
-
-    print_csv("debug.csv");
+    os.close();*/
 }
 
 uint32_t Graph::remove_transitive_edges() {
@@ -1108,8 +1146,10 @@ uint32_t Graph::remove_tips() {
         if (num_removed_edges == end_node->suffix_edges_.size()) {
             auto curr_node = it.get();
             while (curr_node->id_ != end_node->id_) {
-                end_node->suffix_edges_[0]->is_marked_ = true;
-                end_node->suffix_edges_[0]->pair_->is_marked_ = true;
+                curr_node->suffix_edges_[0]->is_marked_ = true;
+                curr_node->suffix_edges_[0]->pair_->is_marked_ = true;
+                marked_edges_.emplace(curr_node->suffix_edges_[0]->id_);
+                marked_edges_.emplace(curr_node->suffix_edges_[0]->pair_->id_);
                 curr_node = curr_node->suffix_edges_[0]->end_node_;
             }
         }
@@ -1459,11 +1499,11 @@ uint32_t Graph::create_unitigs() {
                 marked_edges_.emplace(edge->pair_->id_);
 
                 std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
-                    edge->begin_node_, unitig.get(), edge->length_));
+                    edge->begin_node_, unitig.get(), edge->length_, true));
                 std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
                     unitig_complement.get(), edge->pair_->end_node_,
                     edge->pair_->length_ + unitig_complement->length() -
-                    begin_node->pair_->length()));
+                    begin_node->pair_->length(), true));
 
                 unitig_edge->pair_ = unitig_edge_complement.get();
                 unitig_edge_complement->pair_ = unitig_edge.get();
@@ -1489,10 +1529,10 @@ uint32_t Graph::create_unitigs() {
 
                 std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
                     unitig.get(), edge->end_node_, edge->length_ +
-                    unitig->length() - end_node->length()));
+                    unitig->length() - end_node->length(), true));
                 std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
                     edge->pair_->begin_node_, unitig_complement.get(),
-                    edge->pair_->length_));
+                    edge->pair_->length_, true));
 
                 unitig_edge->pair_ = unitig_edge_complement.get();
                 unitig_edge_complement->pair_ = unitig_edge.get();
@@ -1620,7 +1660,7 @@ void Graph::remove_marked_objects(bool remove_nodes) {
     marked_edges_.clear();
 }
 
-void Graph::print_csv(std::string path) const {
+void Graph::print_csv(const std::string& path) const {
 
     auto graph_file = fopen(path.c_str(), "w");
 
@@ -1646,7 +1686,7 @@ void Graph::print_csv(std::string path) const {
     fclose(graph_file);
 }
 
-void Graph::print_gfa(std::string path) const {
+void Graph::print_gfa(const std::string& path) const {
 
     auto graph_file = fopen(path.c_str(), "w");
 
@@ -1693,7 +1733,7 @@ void Graph::print_gfa(std::string path) const {
     fclose(graph_file);
 }
 
-void Graph::print_json(std::string path) const {
+void Graph::print_json(const std::string& path) const {
 
     std::ofstream os(path);
     os << "{\"knots\":{";
@@ -1766,7 +1806,7 @@ void Graph::print_json(std::string path) const {
     os.close();
 }
 
-void Graph::print_fastq(std::string path) const {
+void Graph::print_fasta(const std::string& path) const {
 
     std::unordered_set<uint64_t> node_ids;
 
@@ -1796,12 +1836,19 @@ void Graph::print_fastq(std::string path) const {
     std::ofstream os(path);
 
     for (const auto& it: node_ids) {
-        os << ">" << it << std::endl;
+        os << ">" << nodes_[it]->sequence_ids_.front() << std::endl;
         os << nodes_[it]->data_ << std::endl;
     }
 
     os.close();
 }
 
+void Graph::print_debug(const std::string& prefix) const {
+    if (!prefix.empty()) {
+        print_csv(prefix + "_graph.csv");
+        print_json(prefix + "_knots.json");
+        print_fasta(prefix + "_knots.fasta");
+    }
+}
 
 }

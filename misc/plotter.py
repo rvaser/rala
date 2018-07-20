@@ -24,9 +24,8 @@ class Plotter:
 
     @staticmethod
     def plot_pile(pile, orientation, overlap_length, type, title, ax):
-        if ("y" not in pile or "~y" not in pile or "b" not in pile or
-            "e" not in pile or "h" not in pile or "m" not in pile or
-            "p10" not in pile):
+        if ("y" not in pile or "b" not in pile or "e" not in pile or
+            "h" not in pile or "m" not in pile or "p10" not in pile):
             eprint("[rala::Plotter::plot_pile] error: incomplete pile!")
             sys.exit(1);
 
@@ -34,8 +33,6 @@ class Plotter:
 
         if (orientation == 0):
             ax.plot(x, pile["y"], label="y")
-            if (pile["~y"]):
-                ax.plot(x, pile["~y"], label="~y")
             for slope in pile["h"]:
                 ax.axvline(slope, color="r", linestyle=":")
             begin = pile["b"]
@@ -43,8 +40,6 @@ class Plotter:
 
         else:
             ax.plot(x, list(reversed(pile["y"])), label="y")
-            if (pile["~y"]):
-                ax.plot(x, list(reversed(pile["~y"])), label="~y")
             for slope in pile["h"]:
                 ax.axvline(len(x) - slope, color="r", linestyle=":")
             begin = len(x) - pile["e"]
