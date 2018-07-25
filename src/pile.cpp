@@ -438,24 +438,15 @@ void Pile::correct(const std::vector<std::shared_ptr<Overlap>>& overlaps,
 
 bool Pile::find_valid_region() {
 
-    uint32_t new_begin = 0, new_end = 0, current_begin = 0;
+    uint32_t new_begin = 0, new_end = 0;
     bool found_begin = false;
     for (uint32_t i = begin_; i < end_; ++i) {
         if (!found_begin && data_[i] >= 3) {
-            current_begin = i;
+            new_begin = i;
             found_begin = true;
-        } else if (found_begin && data_[i] < 3) {
-            if (i - current_begin > new_end - new_begin) {
-                new_begin = current_begin;
-                new_end = i;
-            }
-            found_begin = false;
         }
-    }
-    if (found_begin) {
-        if (end_ - current_begin > new_end - new_begin) {
-            new_begin = current_begin;
-            new_end = end_;
+        if (data_[i] >=3) {
+            new_end = i;
         }
     }
 
@@ -594,15 +585,10 @@ void Pile::find_repetitive_regions(uint16_t dataset_median) {
         if (!(slope_regions[i].first & 1)) {
             continue;
         }
-        bool found_hill = false;
         for (uint32_t j = i + 1; j < slope_regions.size(); ++j) {
             if (slope_regions[j].first & 1) {
-                if (found_hill) {
-                    break;
-                }
                 continue;
             }
-            found_hill = true;
             auto hill_type = hillType(slope_regions[i], slope_regions[j],
                 dataset_median, data_, begin_, end_);
 

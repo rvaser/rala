@@ -6,13 +6,8 @@
 #include "graph.hpp"
 #include "thread_pool/thread_pool.hpp"
 
-static const char* version = "v0.7.0";
-
 static struct option options[] = {
-    {"include-unassembled", no_argument, 0, 'u'},
-    {"debug", required_argument, 0, 'd'},
     {"threads", required_argument, 0, 't'},
-    {"version", no_argument, 0, 'v'},
     {"help", no_argument, 0, 'h'},
     {0, 0, 0, 0}
 };
@@ -22,24 +17,13 @@ void help();
 int main(int argc, char** argv) {
 
     uint32_t num_threads = 1;
-    bool drop_unassembled_sequences = true;
-    std::string debug_prefix = "";
 
     char opt;
-    while ((opt = getopt_long(argc, argv, "ud:t:h", options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "t:h", options, nullptr)) != -1) {
         switch (opt) {
-            case 'u':
-                drop_unassembled_sequences = false;
-                break;
-            case 'd':
-                debug_prefix = optarg;
-                break;
             case 't':
                 num_threads = atoi(optarg);
                 break;
-            case 'v':
-                printf("%s\n", version);
-                exit(0);
             case 'h':
                 help();
                 exit(0);
@@ -60,16 +44,17 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
+    // build the assembly graph
     auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
-    graph->construct();
-    graph->simplify(debug_prefix);
+    graph->construct(false, false);
 
+    // simplify the assembly graph
+
+    // print the assembly graph
+    graph->print_gfa("assembly_graph.gfa");
+
+    // extract contigs
     std::vector<std::unique_ptr<rala::Sequence>> contigs;
-    graph->extract_contigs(contigs, drop_unassembled_sequences);
-
-    for (const auto& it: contigs) {
-        fprintf(stdout, "%s\n%s\n", it->name().c_str(), it->data().c_str());
-    }
 
     return 0;
 }
@@ -86,15 +71,9 @@ void help() {
         "        containing pairwise overlaps\n"
         "\n"
         "    options:\n"
-        "        -u, --include-unassembled\n"
-        "            output unassembled sequences (singletons and short contigs)\n"
-        "        -d, --debug <string>\n"
-        "            enable debug output with given prefix\n"
         "        -t, --threads <int>\n"
         "            default: 1\n"
         "            number of threads\n"
-        "        --version\n"
-        "            prints the version number\n"
         "        -h, --help\n"
         "            prints the usage\n");
 }

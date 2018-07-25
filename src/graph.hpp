@@ -40,9 +40,9 @@ public:
     /*!
      * @brief Constructs the assembly graph by removing contained sequences and
      * transitive overlaps (removes chimeric and repetitive sequences before
-     * construction if flag is set)
+     * construction if corresponding flags are set)
      */
-    void construct(bool preprocess = true);
+    void construct(bool remove_chimeric_reads, bool remove_repeat_induced_overlaps);
 
     /*!
      * @brief Removes transitive edges and tips, pops bubbles
@@ -79,8 +79,7 @@ public:
     /*!
      * @brief Stores all contigs into dst
      */
-    void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
-        bool drop_unassembled_sequences = true) const;
+    void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const;
 
     /*!
      * @brief Prints assembly graph in csv format
@@ -110,7 +109,7 @@ private:
     /*!
      * @brief Initializes all structures and trims sequences
      */
-    void initialize();
+    void initialize(bool preprocess);
 
     /*!
      * @brief Splits chimeric sequences and removes overlaps between sequences

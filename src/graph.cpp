@@ -237,7 +237,7 @@ Graph::Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
 Graph::~Graph() {
 }
 
-void Graph::initialize() {
+void Graph::initialize(bool preprocess) {
 
     Timer timer;
     timer.start();
@@ -419,26 +419,28 @@ void Graph::initialize() {
         coverage_median_);
 
     // find chimeric reads
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
+    if (preprocess) {
+        for (const auto& it: piles_) {
+            if (it == nullptr) {
+                continue;
+            }
+
+            thread_futures.emplace_back(thread_pool_->submit_task(
+                [&](uint32_t j) -> void {
+                    if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
+                        piles_[j].reset();
+                    } else {
+                        piles_[j]->resolve_peculiar_regions();
+                    }
+                }, it->id()));
         }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
 
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint32_t j) -> void {
-                if (!piles_[j]->find_chimeric_regions(coverage_median_)) {
-                    piles_[j].reset();
-                } else {
-                    piles_[j]->resolve_peculiar_regions();
-                }
-            }, it->id()));
+        fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
     }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
-
-    fprintf(stderr, "[rala::Graph::preprocess] processed chimeric sequences\n");
 
     // trim reads
     for (const auto& it: piles_) {
@@ -480,22 +482,6 @@ void Graph::preprocess() {
 
     Timer timer;
     timer.start();
-
-    // TODO: use low quaility filtering?
-    // filter low quality reads
-    /*uint32_t num_low_quality_reads = 0;
-    for (auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-        if (it->median() * 2 < coverage_median_) {
-            it.reset();
-            ++num_low_quality_reads;
-        }
-    }
-    fprintf(stderr, "[rala::Graph::preprocess] number of low quality reads = %u\n",
-        num_low_quality_reads);
-    */
 
     // correct piles
     std::vector<std::future<void>> thread_futures;
@@ -608,7 +594,7 @@ void Graph::preprocess() {
     timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
-void Graph::construct(bool preprocess) {
+void Graph::construct(bool remove_chimeric_reads, bool remove_repeat_induced_overlaps) {
 
     if (!piles_.empty()) {
         fprintf(stderr, "[rala::Graph::construct] warning: "
@@ -616,8 +602,8 @@ void Graph::construct(bool preprocess) {
         return;
     }
 
-    initialize();
-    if (preprocess) {
+    initialize(remove_chimeric_reads);
+    if (remove_repeat_induced_overlaps) {
         this->preprocess();
     }
 
@@ -1420,8 +1406,7 @@ uint32_t Graph::create_unitigs() {
     return num_unitigs_created;
 }
 
-void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
-    bool drop_unassembled_sequences) const {
+void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst) const {
 
     uint32_t contig_id = 0;
     std::vector<uint32_t> contig_length;
@@ -1429,8 +1414,7 @@ void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
         if (node == nullptr || node->is_rc()) {
             continue;
         }
-        if (drop_unassembled_sequences && (node->sequence_ids_.size() < 6 ||
-            node->length() < 10000)) {
+        if (node->sequence_ids_.size() < 6 || node->length() < 10000) {
             continue;
         }
         contig_length.emplace_back(node->data_.size());
