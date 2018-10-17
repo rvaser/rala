@@ -877,7 +877,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     const std::string& path) {
 
-    /*if (path.empty()) {
+    if (path.empty()) {
         return;
     }
 
@@ -933,7 +933,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
         piles_[it]->find_valid_region();
         piles_[it]->find_median();
-    }*/
+    }
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
     for (const auto& it: overlaps) {
@@ -982,12 +982,12 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         uint16_t component_median = medians[medians.size() / 2];
 
         for (const auto& it: component) {
-            //if (sequence_ids.find(it) != sequence_ids.end()) {
+            if (sequence_ids.find(it) != sequence_ids.end()) {
                 thread_futures.emplace_back(thread_pool_->submit_task(
                     [&](uint64_t i) -> void {
                         piles_[i]->find_repetitive_hills(component_median);
                     }, it));
-            //}
+            }
         }
         for (const auto& it: thread_futures) {
             it.wait();
@@ -998,7 +998,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     for (auto& it: overlaps) {
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
             !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
-            //it->set_invalid();
+            it->set_invalid();
             it.reset();
         }
     }
