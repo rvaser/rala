@@ -57,8 +57,8 @@ std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
 
 Pile::Pile(uint64_t id, uint32_t read_length)
         : id_(id), begin_(0), end_(read_length), b_(0), p10_(0), median_(0),
-        data_(end_ - begin_, 0), repeat_hills_(), chimeric_pits_(),
-        chimeric_hills_(), chimeric_hill_coverage_() {
+        data_(end_ - begin_, 0), repeat_hills_(), repeat_hill_coverage_(),
+        chimeric_pits_(), chimeric_hills_(), chimeric_hill_coverage_() {
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> Pile::find_slopes(double q) {
@@ -456,8 +456,10 @@ void Pile::find_chimeric_hills() {
 
 void Pile::check_chimeric_hills(const std::unique_ptr<Overlap>& overlap) {
 
-    uint32_t begin = overlap->a_id() == id_ ? overlap->a_begin() : overlap->b_begin();
-    uint32_t end = overlap->a_id() == id_ ? overlap->a_end() : overlap->b_end();
+    uint32_t begin = this->begin_ + (overlap->a_id() == id_ ? overlap->a_begin() :
+        overlap->b_begin());
+    uint32_t end = this->begin_ + (overlap->a_id() == id_ ? overlap->a_end() :
+        overlap->b_end());
 
     for (uint32_t i = 0; i < chimeric_hills_.size(); ++i) {
         if (begin < chimeric_hills_[i].first && end > chimeric_hills_[i].second) {
@@ -560,6 +562,34 @@ void Pile::find_repetitive_hills(uint16_t dataset_median) {
         it.first = std::max(begin_, it.first);
         it.second = std::min(end_, it.second);
     }
+
+    repeat_hill_coverage_.resize(repeat_hills_.size(), false);
+}
+
+void Pile::check_repetitive_hills(const std::unique_ptr<Overlap>& overlap) {
+
+    uint32_t begin = this->begin_ + (overlap->a_id() == id_ ? overlap->a_begin() :
+        overlap->b_begin());
+    uint32_t end = this->begin_ + (overlap->a_id() == id_ ? overlap->a_end() :
+        overlap->b_end());
+    uint32_t fuzz = 420;
+
+    for (uint32_t i = 0; i < repeat_hills_.size(); ++i) {
+        if (begin < repeat_hills_[i].second && repeat_hills_[i].first < end) {
+            if (repeat_hills_[i].first < 0.1 * (this->end_ - this->begin_) + this->begin_) {
+                // left hill
+                if (end >= repeat_hills_[i].second + fuzz) {
+                    repeat_hill_coverage_[i] = true;
+                }
+            } else if (repeat_hills_[i].second > 0.9 * (this->end_ - this->begin_) + this->begin_) {
+                // right hill
+                if (begin + fuzz <= repeat_hills_[i].first) {
+                    repeat_hill_coverage_[i] = true;
+                }
+            }
+
+        }
+    }
 }
 
 void Pile::add_repetitive_region(uint32_t begin, uint32_t end) {
@@ -580,16 +610,17 @@ bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
     uint32_t fuzz = 420;
 
     auto check_hills = [&](const std::vector<std::pair<uint32_t, uint32_t>>& hills) -> bool {
-        for (const auto& it: hills) {
+        for (uint32_t i = 0; i < hills.size(); ++i) {
+            const auto& it = hills[i];
             if (begin < it.second && it.first < end) {
                 if (it.first < 0.1 * (this->end_ - this->begin_) + this->begin_) {
                     // left hill
-                    if (end < it.second + fuzz) {
+                    if (end < it.second + fuzz && repeat_hill_coverage_[i]) {
                         return false;
                     }
                 } else if (it.second > 0.9 * (this->end_ - this->begin_) + this->begin_) {
                     // right hill
-                    if (begin + fuzz > it.first) {
+                    if (begin + fuzz > it.first && repeat_hill_coverage_[i]) {
                         return false;
                     }
                 }

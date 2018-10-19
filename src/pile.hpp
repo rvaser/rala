@@ -127,6 +127,15 @@ public:
      */
     void find_repetitive_hills(uint16_t dataset_median);
 
+    bool has_repetitive_hills() const {
+        return !repeat_hills_.empty();
+    }
+
+    /*!
+     * @brief Adds coverage to repetitive hill (number of reads passing through)
+     */
+    void check_repetitive_hills(const std::unique_ptr<Overlap>& overlap);
+
     /*
      * @brief Manually add repetitive region in data_
      */
@@ -159,6 +168,7 @@ private:
     uint16_t median_;
     std::vector<uint16_t> data_;
     std::vector<std::pair<uint32_t, uint32_t>> repeat_hills_;
+    std::vector<bool> repeat_hill_coverage_;
     std::vector<std::pair<uint32_t, uint32_t>> chimeric_pits_;
     std::vector<std::pair<uint32_t, uint32_t>> chimeric_hills_;
     std::vector<uint32_t> chimeric_hill_coverage_;

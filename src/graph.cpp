@@ -995,6 +995,13 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         thread_futures.clear();
     }
 
+    for (auto& it: sensitive_overlaps) {
+        uint32_t b_id = atoi(it->b_name_.c_str());
+        if (piles_[b_id]->has_repetitive_hills()) {
+            piles_[b_id]->check_repetitive_hills(it);
+        }
+    }
+
     for (auto& it: overlaps) {
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
             !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
@@ -1736,7 +1743,7 @@ void Graph::print_gfa(const std::string& path) const {
 void Graph::print_json(const std::string& path) const {
 
     std::ofstream os(path);
-    os << "{\"knots\":{";
+    os << "{\"nodes\":{";
     bool is_first = true;
 
     std::unordered_set<uint64_t> sequence_ids;
@@ -1811,7 +1818,7 @@ void Graph::print_fasta(const std::string& path) const {
     std::unordered_set<uint64_t> node_ids;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc() || !it->is_junction()) {
+        if (it == nullptr || it->is_rc()) {
             continue;
         }
 
@@ -1845,9 +1852,9 @@ void Graph::print_fasta(const std::string& path) const {
 
 void Graph::print_debug(const std::string& prefix) const {
     if (!prefix.empty()) {
-        print_csv(prefix + "_graph.csv");
-        print_json(prefix + "_knots.json");
-        print_fasta(prefix + "_knots.fasta");
+        print_csv(prefix + ".csv");
+        print_json(prefix + ".json");
+        print_fasta(prefix + ".fasta");
     }
 }
 
