@@ -84,7 +84,7 @@ bool Overlap::transmute(const std::vector<std::unique_ptr<Pile>>& piles,
 bool Overlap::trim(const std::vector<std::unique_ptr<Pile>>& piles) {
 
     if (!is_transmuted_) {
-        fprintf(stderr, "[racon::Overlap::trim] error: overlap is not transmuted!\n");
+        fprintf(stderr, "[rala::Overlap::trim] error: overlap is not transmuted!\n");
         exit(1);
     }
     if (a_id_ >= piles.size() || piles[a_id_] == nullptr ||
@@ -135,10 +135,10 @@ bool Overlap::trim(const std::vector<std::unique_ptr<Pile>>& piles) {
         return false;
     }
 
-    a_begin = std::max(a_begin, pile_a->begin()) - pile_a->begin();
-    a_end = std::min(a_end, pile_a->end()) - pile_a->begin();
-    b_begin = std::max(b_begin, pile_b->begin()) - pile_b->begin();
-    b_end = std::min(b_end, pile_b->end()) - pile_b->begin();
+    a_begin = std::max(a_begin, pile_a->begin()); // - pile_a->begin();
+    a_end = std::min(a_end, pile_a->end()); // - pile_a->begin();
+    b_begin = std::max(b_begin, pile_b->begin()); // - pile_b->begin();
+    b_end = std::min(b_end, pile_b->end()); // - pile_b->begin();
 
     if (a_begin >= a_end || a_end - a_begin < 84 ||
         b_begin >= b_end || b_end - b_begin < 84) {
@@ -147,35 +147,52 @@ bool Overlap::trim(const std::vector<std::unique_ptr<Pile>>& piles) {
 
     this->a_begin_ = a_begin;
     this->a_end_ = a_end;
-    a_length_ = pile_a->end() - pile_a->begin();
+    // a_length_ = pile_a->end() - pile_a->begin();
 
     this->b_begin_ = b_begin;
     this->b_end_ = b_end;
-    b_length_ = pile_b->end() - pile_b->begin();
+    // b_length_ = pile_b->end() - pile_b->begin();
 
     length_ = std::max(a_end - a_begin, b_end - b_begin);
 
     return true;
 }
 
-OverlapType Overlap::type() const {
+OverlapType Overlap::type(const std::vector<std::unique_ptr<Pile>>& piles) const {
 
-    uint32_t a_begin = a_begin_;
-    uint32_t a_end = a_end_;
-    uint32_t b_begin = orientation_ == 0 ? b_begin_ : b_length_ - b_end_;
-    uint32_t b_end = orientation_ == 0 ? b_end_ : b_length_ - b_begin_;
+    if (!is_transmuted_) {
+        fprintf(stderr, "[rala::Overlap::type] error: overlap is not transmuted!\n");
+        exit(1);
+    }
+    if (a_id_ >= piles.size() || piles[a_id_] == nullptr ||
+        b_id_ >= piles.size() || piles[b_id_] == nullptr) {
+        fprintf(stderr, "[rala::Overlap::type] error: missing piles!\n");
+        exit(1);
+    }
 
-    uint32_t overhang = std::min(a_begin, b_begin) + std::min(a_length_ -
-        a_end, b_length_ - b_end);
+    uint32_t a_length = piles[a_id_]->end() - piles[a_id_]->begin();
+    uint32_t a_begin = this->a_begin_ - piles[a_id_]->begin();
+    uint32_t a_end = this->a_end_ - piles[a_id_]->begin();
+
+    uint32_t b_length = piles[b_id_]->end() - piles[b_id_]->begin();
+    uint32_t b_begin = orientation_ == 0 ?
+        this->b_begin_ - piles[b_id_]->begin() :
+        b_length - this->b_end_ + piles[b_id_]->begin();
+    uint32_t b_end = orientation_ == 0 ?
+        this->b_end_ - piles[b_id_]->begin() :
+        b_length - this->b_begin_ + piles[b_id_]->begin();
+
+    uint32_t overhang = std::min(a_begin, b_begin) + std::min(a_length -
+        a_end, b_length - b_end);
 
     if (a_end - a_begin < (a_end - a_begin + overhang) * 0.875 ||
         b_end - b_begin < (b_end - b_begin + overhang) * 0.875) {
         return OverlapType::kX;
     }
-    if (a_begin <= b_begin && (a_length_ - a_end) <= (b_length_ - b_end)) {
+    if (a_begin <= b_begin && (a_length - a_end) <= (b_length - b_end)) {
         return OverlapType::kB;
     }
-    if (a_begin >= b_begin && (a_length_ - a_end) >= (b_length_ - b_end)) {
+    if (a_begin >= b_begin && (a_length - a_end) >= (b_length - b_end)) {
         return OverlapType::kA;
     }
 
@@ -184,16 +201,16 @@ OverlapType Overlap::type() const {
     };
 
     if (absolute_difference(a_end_ - a_begin_, b_end_ - b_begin_) < length_ * 0.01) {
-        uint32_t min_extension = 0.05 * std::max(a_length_, b_length_);
+        uint32_t min_extension = 0.05 * std::max(a_length, b_length);
 
         if (absolute_difference(a_begin, b_begin) < min_extension) {
-            if ((a_length_ - a_end) >= (b_length_ - b_end)) {
+            if ((a_length - a_end) >= (b_length - b_end)) {
                 return OverlapType::kA;
             } else {
                 return OverlapType::kB;
             }
         }
-        if (absolute_difference((a_length_ - a_end), (b_length_ - b_end)) < min_extension) {
+        if (absolute_difference((a_length - a_end), (b_length - b_end)) < min_extension) {
             if (a_begin >= b_begin) {
                 return OverlapType::kA;
             } else {

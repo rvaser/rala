@@ -459,7 +459,7 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
                 piles_[it->b_id()]->check_chimeric_hills(it);
             }
 
-            switch (it->type()) {
+            switch (it->type(piles_)) {
                 case OverlapType::kX:
                     internals.emplace_back(std::move(it));
                     //it.reset();
@@ -518,7 +518,7 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
     preprocess(overlaps, internals);
-    preprocess(overlaps, repeat_overlaps_path);
+    //preprocess(overlaps, repeat_overlaps_path);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -574,19 +574,24 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
         Node* node_b = nodes_[sequence_id_to_node_id[it->b_id()] +
             it->orientation()].get();
 
-        uint32_t a_begin = it->a_begin();
-        uint32_t a_end = it->a_end();
-        uint32_t b_begin = it->orientation() == 0 ? it->b_begin() :
-            it->b_length() - it->b_end();
-        uint32_t b_end = it->orientation() == 0 ? it->b_end() :
-            it->b_length() - it->b_begin();
+        uint32_t a_length = piles_[it->a_id()]->end() - piles_[it->a_id()]->begin();
+        uint32_t a_begin = it->a_begin() - piles_[it->a_id()]->begin();
+        uint32_t a_end = it->a_end() - piles_[it->a_id()]->begin();
 
-        if (it->type() == OverlapType::kAB) {
+        uint32_t b_length = piles_[it->b_id()]->end() - piles_[it->b_id()]->begin();
+        uint32_t b_begin = it->orientation() == 0 ?
+            it->b_begin() - piles_[it->b_id()]->begin() :
+            b_length - it->b_end() + piles_[it->b_id()]->begin();
+        uint32_t b_end = it->orientation() == 0 ?
+            it->b_end() - piles_[it->b_id()]->begin() :
+            b_length - it->b_begin() + piles_[it->b_id()]->begin();
+
+        if (it->type(piles_) == OverlapType::kAB) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_a, node_b,
                 a_begin - b_begin, it->is_valid()));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
-                node_b->pair_, node_a->pair_, (it->b_length() - b_end) -
-                (it->a_length() - a_end), it->is_valid()));
+                node_b->pair_, node_a->pair_, (b_length - b_end) -
+                (a_length - a_end), it->is_valid()));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -599,12 +604,12 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
             edges_.emplace_back(std::move(edge));
             edges_.emplace_back(std::move(edge_complement));
 
-        } else if (it->type() == OverlapType::kBA) {
+        } else if (it->type(piles_) == OverlapType::kBA) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
                 b_begin - a_begin, it->is_valid()));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
-                node_a->pair_, node_b->pair_, (it->a_length() - a_end) -
-                (it->b_length() - b_end), it->is_valid()));
+                node_a->pair_, node_b->pair_, (a_length - a_end) -
+                (b_length - b_end), it->is_valid()));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -704,7 +709,6 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         }
         thread_futures.emplace_back(thread_pool_->submit_task(
             [&](uint64_t i) -> void {
-                piles_[i]->update_b();
                 if (piles_[i]->has_chimeric_hill() &&
                     piles_[i]->break_over_chimeric_hills() == false) {
                     piles_[i].reset();
@@ -769,13 +773,6 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         std::vector<std::vector<uint64_t>>().swap(connections);
         std::vector<bool>().swap(is_visited);
 
-        for (auto& it: piles_) {
-            if (it == nullptr) {
-                continue;
-            }
-            it->update_b();
-        }
-
         for (const auto& component: components) {
 
             std::vector<uint16_t> medians;
@@ -816,7 +813,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
                 continue;
             }
 
-            switch (it->type()) {
+            switch (it->type(piles_)) {
                 case OverlapType::kAB:
                 case OverlapType::kBA:
                     overlaps.emplace_back(std::move(it));
@@ -833,7 +830,11 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
 
     for (auto& it: overlaps) {
-        switch (it->type()) {
+        if (piles_[it->a_id()] == nullptr || piles_[it->b_id()] == nullptr) {
+            it.reset();
+            continue;
+        }
+        switch (it->type(piles_)) {
             case OverlapType::kA:
                 piles_[it->b_id()].reset();
                 it.reset();
@@ -847,7 +848,11 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         }
     }
     for (auto& it: internals) {
-        switch (it->type()) {
+        if (piles_[it->a_id()] == nullptr || piles_[it->b_id()] == nullptr) {
+            it.reset();
+            continue;
+        }
+        switch (it->type(piles_)) {
             case OverlapType::kA:
                 piles_[it->b_id()].reset();
                 it.reset();
@@ -860,6 +865,8 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
                 break;
         }
     }
+    shrinkToFit(internals, 0);
+
     for (auto& it: overlaps) {
         if (it == nullptr) {
             continue;

@@ -30,18 +30,14 @@ public:
      * @brief Returns begin_ of the valid interval [begin_, end_>
      */
     uint32_t begin() const {
-        return begin_ - b_;
+        return begin_;
     }
 
     /*!
      * @brief Returns end_ of the valid interval [begin_, end_>
      */
     uint32_t end() const {
-        return end_ - b_;
-    }
-
-    void update_b() {
-        b_ = begin_;
+        return end_;
     }
 
     uint16_t p10() const {
@@ -59,7 +55,7 @@ public:
     }
 
     /*!
-     * @brief Resizes data_ to (end_ - begin_) filled with zeroes
+     * @brief Fills data_ with zeroes in interval [begin_, end_]
      */
     void clear() {
         std::fill(data_.begin() + begin_, data_.begin() + end_, 0);
@@ -79,7 +75,7 @@ public:
     /*!
      * @brief Locates region in data_ with values greater or equal to predefined
      * coverage; updates begin_, end_ and data_ accordingly;
-     * if there is no such region (with valid coverage and longer than 1000),
+     * if there is no such region (with valid coverage and longer than 1260),
      * false is returned
      */
     bool find_valid_region();
@@ -163,7 +159,6 @@ private:
     uint64_t id_;
     uint32_t begin_;
     uint32_t end_;
-    uint32_t b_;
     uint16_t p10_;
     uint16_t median_;
     std::vector<uint16_t> data_;

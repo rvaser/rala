@@ -56,7 +56,7 @@ std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
 }
 
 Pile::Pile(uint64_t id, uint32_t read_length)
-        : id_(id), begin_(0), end_(read_length), b_(0), p10_(0), median_(0),
+        : id_(id), begin_(0), end_(read_length), p10_(0), median_(0),
         data_(end_ - begin_, 0), repeat_hills_(), repeat_hill_coverage_(),
         chimeric_pits_(), chimeric_hills_(), chimeric_hill_coverage_() {
 }

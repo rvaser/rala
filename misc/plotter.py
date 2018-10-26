@@ -82,7 +82,7 @@ class Plotter:
                 figure.text(0.5, 0.04, "base", ha="center")
                 figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
                 matplotlib.pyplot.legend(loc="best")
-                matplotlib.pyplot.savefig(self.out_directory + str(pile) + ".png")
+                matplotlib.pyplot.savefig(self.out_path + str(pile) + ".png")
                 matplotlib.pyplot.close(figure)
 
             return

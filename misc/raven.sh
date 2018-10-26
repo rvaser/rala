@@ -22,4 +22,3 @@ java -cp $gepard org.gepard.client.cmdline.CommandLine -seq1 $2 -seq2 "$dataset"
 rm "$dataset"_overlaps.paf
 rm "$dataset"_all_overlaps.paf
 rm "$dataset"_layout.fasta
-rm "$dataset"_layout_final.fasta

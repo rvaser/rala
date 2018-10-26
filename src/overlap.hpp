@@ -88,7 +88,7 @@ public:
 
     bool trim(const std::vector<std::unique_ptr<Pile>>& piles);
 
-    OverlapType type() const;
+    OverlapType type(const std::vector<std::unique_ptr<Pile>>& piles) const;
 
     friend bioparser::MhapParser<Overlap>;
     friend bioparser::PafParser<Overlap>;
