@@ -518,7 +518,7 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
     preprocess(overlaps, internals);
-    //preprocess(overlaps, repeat_overlaps_path);
+    preprocess(overlaps, repeat_overlaps_path);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -1010,9 +1010,13 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
 
     for (auto& it: overlaps) {
+        if (it->trim(piles_) == false) {
+            it.reset();
+            continue;
+        }
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
             !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
-            it->set_invalid();
+            //it->set_invalid();
             it.reset();
         }
     }

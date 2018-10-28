@@ -605,8 +605,6 @@ void Pile::add_repetitive_region(uint32_t begin, uint32_t end) {
 
 bool Pile::is_valid_overlap(uint32_t begin, uint32_t end) const {
 
-    begin += this->begin_;
-    end += this->begin_;
     uint32_t fuzz = 420;
 
     auto check_hills = [&](const std::vector<std::pair<uint32_t, uint32_t>>& hills) -> bool {
