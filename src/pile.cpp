@@ -568,20 +568,20 @@ void Pile::find_repetitive_hills(uint16_t dataset_median) {
 
 void Pile::check_repetitive_hills(const std::unique_ptr<Overlap>& overlap) {
 
-    uint32_t begin = this->begin_ + (overlap->a_id() == id_ ? overlap->a_begin() :
-        overlap->b_begin());
-    uint32_t end = this->begin_ + (overlap->a_id() == id_ ? overlap->a_end() :
-        overlap->b_end());
+    uint32_t begin = overlap->b_begin();
+    uint32_t end = overlap->b_end();
     uint32_t fuzz = 420;
 
     for (uint32_t i = 0; i < repeat_hills_.size(); ++i) {
         if (begin < repeat_hills_[i].second && repeat_hills_[i].first < end) {
-            if (repeat_hills_[i].first < 0.1 * (this->end_ - this->begin_) + this->begin_) {
+            if (repeat_hills_[i].first < 0.1 * (this->end_ - this->begin_) + this->begin_ &&
+                begin - this->begin_ < this->end_ - end) {
                 // left hill
                 if (end >= repeat_hills_[i].second + fuzz) {
                     repeat_hill_coverage_[i] = true;
                 }
-            } else if (repeat_hills_[i].second > 0.9 * (this->end_ - this->begin_) + this->begin_) {
+            } else if (repeat_hills_[i].second > 0.9 * (this->end_ - this->begin_) + this->begin_ &&
+                begin - this->begin_ > this->end_ - end) {
                 // right hill
                 if (begin + fuzz <= repeat_hills_[i].first) {
                     repeat_hill_coverage_[i] = true;

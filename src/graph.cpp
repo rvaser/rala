@@ -938,8 +938,8 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 
     for (const auto& it: sequence_ids) {
         piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
-        piles_[it]->find_valid_region();
-        piles_[it]->find_median();
+        //piles_[it]->find_valid_region();
+        //piles_[it]->find_median();
     }
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
