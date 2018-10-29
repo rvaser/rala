@@ -283,11 +283,11 @@ void Pile::add_layers(std::vector<uint32_t>& overlap_bounds) {
     uint32_t last_bound = begin_;
     for (const auto& bound: overlap_bounds) {
         if (coverage > 0) {
-            for (uint32_t i = last_bound; i < (bound >> 1) + begin_; ++i) {
+            for (uint32_t i = last_bound; i < (bound >> 1); ++i) {
                 data_[i] += coverage;
             }
         }
-        last_bound = (bound >> 1) + begin_;
+        last_bound = (bound >> 1);
         if (bound & 1) {
             --coverage;
         } else {

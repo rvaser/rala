@@ -87,6 +87,9 @@ public:
     bool transmute(const std::vector<std::unique_ptr<Pile>>& piles,
         const std::unordered_map<std::string, uint64_t>& name_to_id);
 
+    bool transmute_(const std::vector<std::unique_ptr<Pile>>& piles,
+        const std::unordered_map<std::string, uint64_t>& name_to_id);
+
     bool trim(const std::vector<std::unique_ptr<Pile>>& piles);
 
     OverlapType type(const std::vector<std::unique_ptr<Pile>>& piles) const;

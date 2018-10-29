@@ -81,6 +81,39 @@ bool Overlap::transmute(const std::vector<std::unique_ptr<Pile>>& piles,
     return true;
 }
 
+bool Overlap::transmute_(const std::vector<std::unique_ptr<Pile>>& piles,
+    const std::unordered_map<std::string, uint64_t>& name_to_id) {
+
+    if (is_transmuted_) {
+        return true;
+    }
+
+    if (!a_name_.empty()) {
+        auto it = name_to_id.find(a_name_);
+        if (it == name_to_id.end()) {
+            return false;
+        }
+        a_id_ = it->second;
+        std::string().swap(a_name_);
+    }
+
+    if (!b_name_.empty()) {
+        auto it = name_to_id.find(b_name_);
+        if (it == name_to_id.end()) {
+            return false;
+        }
+        b_id_ = it->second;
+        std::string().swap(b_name_);
+    }
+    b_begin_ += piles[b_id_]->begin();
+    b_end_ += piles[b_id_]->begin();
+    b_length_ = piles[b_id_]->data().size();
+
+    is_transmuted_ = true;
+    return true;
+}
+
+
 bool Overlap::trim(const std::vector<std::unique_ptr<Pile>>& piles) {
 
     if (!is_transmuted_) {

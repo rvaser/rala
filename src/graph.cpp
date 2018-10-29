@@ -912,8 +912,9 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     oparser->parse_objects(sensitive_overlaps, -1);
 
     std::unordered_set<uint64_t> sequence_ids;
-    for (const auto& it: sensitive_overlaps) {
-        sequence_ids.emplace(atoi(it->b_name_.c_str()));
+    for (auto& it: sensitive_overlaps) {
+        it->transmute_(piles_, name_to_id_);
+        sequence_ids.emplace(it->b_id());
     }
 
     std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
@@ -929,10 +930,9 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 
     std::vector<std::vector<uint32_t>> overlap_bounds(num_sequences);
     for (const auto& it: sensitive_overlaps) {
-        uint32_t sequence_id = atoi(it->b_name_.c_str());
-        overlap_bounds[sequence_id_to_id[sequence_id]].emplace_back(
+        overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
             (it->b_begin() + 1) << 1);
-        overlap_bounds[sequence_id_to_id[sequence_id]].emplace_back(
+        overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
             (it->b_end() - 1) << 1 | 1);
     }
 
@@ -1003,11 +1003,37 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
 
     for (auto& it: sensitive_overlaps) {
-        uint32_t b_id = atoi(it->b_name_.c_str());
-        if (piles_[b_id]->has_repetitive_hills()) {
-            piles_[b_id]->check_repetitive_hills(it);
+        if (it->trim(piles_) == false) {
+            it.reset();
+            continue;
+        }
+        if (sequence_ids.find(it->a_id()) == sequence_ids.end()) {
+            it.reset();
+            continue;
+        }
+        bool is_valid = true;
+        switch (it->type(piles_)) {
+            case OverlapType::kX:
+            case OverlapType::kB:
+            case OverlapType::kA:
+                is_valid = false;
+                break;
+            case OverlapType::kAB:
+            case OverlapType::kBA:
+            default:
+                break;
+        }
+
+        if (!is_valid) {
+            it.reset();
+            continue;
+        }
+
+        if (piles_[it->b_id()]->has_repetitive_hills()) {
+            piles_[it->b_id()]->check_repetitive_hills(it);
         }
     }
+    shrinkToFit(sensitive_overlaps, 0);
 
     for (auto& it: overlaps) {
         if (it->trim(piles_) == false) {
@@ -1854,7 +1880,7 @@ void Graph::print_fasta(const std::string& path) const {
     std::ofstream os(path);
 
     for (const auto& it: node_ids) {
-        os << ">" << nodes_[it]->sequence_ids_.front() << std::endl;
+        os << ">" << nodes_[it]->name_ << std::endl;
         os << nodes_[it]->data_ << std::endl;
     }
 
