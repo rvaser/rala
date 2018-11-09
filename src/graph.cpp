@@ -312,13 +312,13 @@ void Graph::initialize() {
             }
 
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_begin() + 4) << 1);
+                (overlaps[i]->a_begin() + 15) << 1);
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_end() - 4) << 1 | 1);
+                (overlaps[i]->a_end() - 15) << 1 | 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_begin() + 4) << 1);
+                (overlaps[i]->b_begin() + 15) << 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_end() - 4) << 1 | 1);
+                (overlaps[i]->b_end() - 15) << 1 | 1);
         }
     };
 
@@ -931,15 +931,15 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::vector<uint32_t>> overlap_bounds(num_sequences);
     for (const auto& it: sensitive_overlaps) {
         overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
-            (it->b_begin() + 1) << 1);
+            it->b_begin() << 1);
         overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
-            (it->b_end() - 1) << 1 | 1);
+            it->b_end() << 1 | 1);
     }
 
     for (const auto& it: sequence_ids) {
         piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
         //piles_[it]->find_valid_region();
-        //piles_[it]->find_median();
+        piles_[it]->find_median();
     }
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
@@ -1855,7 +1855,7 @@ void Graph::print_fasta(const std::string& path) const {
     std::unordered_set<uint64_t> node_ids;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc()) {
+        if (it == nullptr || it->is_rc() || (it->outdegree() == 0 && it->indegree() == 0)) {
             continue;
         }
 
@@ -1891,7 +1891,6 @@ void Graph::print_debug(const std::string& prefix) const {
     if (!prefix.empty()) {
         print_csv(prefix + ".csv");
         print_json(prefix + ".json");
-        print_fasta(prefix + ".fasta");
     }
 }
 

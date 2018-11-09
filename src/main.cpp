@@ -67,6 +67,10 @@ int main(int argc, char** argv) {
 
     auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
     graph->construct(repeat_overlaps_path);
+    if (repeat_overlaps_path.empty()) {
+        graph->print_fasta(debug_prefix + ".fasta");
+        return 0;
+    }
     graph->simplify();
     graph->print_debug(debug_prefix);
 
