@@ -42,7 +42,7 @@ public:
      * removing contained sequences (if path is provided, overlaps between
      * repetitive sequences are removed)
      */
-    void construct(const std::string& repeat_overlaps_path);
+    void construct(const std::string& sensitive_overlaps_path);
 
     /*!
      * @brief Removes transitive edges and tips, pops bubbles
@@ -83,6 +83,11 @@ public:
         bool drop_unassembled_sequences = true);
 
     /*!
+     * @brief Stores all nodes into dst
+     */
+    void extract_nodes(std::vector<std::unique_ptr<Sequence>>& dst);
+
+    /*!
      * @brief Prints assembly graph in csv format
      */
     void print_csv(const std::string& path) const;
@@ -97,8 +102,6 @@ public:
      * with misc/plotter.py)
      */
     void print_json(const std::string& path) const;
-
-    void print_fasta(const std::string& path) const;
 
     void print_debug(const std::string& prefix) const;
 
@@ -125,8 +128,12 @@ private:
     /*!
      * @brief Removes overlaps between repetitive sequences
      */
-    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
-        const std::string& path);
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps);
+
+    /*!
+     * @brief Updates piles with more sensitive overlaps
+     */
+    void preprocess(const std::string& path);
 
     uint64_t find_edge(uint64_t src, uint64_t dst);
 

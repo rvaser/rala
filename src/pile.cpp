@@ -367,7 +367,7 @@ bool Pile::break_over_chimeric_pits(uint16_t dataset_median) {
 
     auto is_chimeric_pit = [&](uint32_t begin, uint32_t end) -> bool {
         for (uint32_t i = begin; i <= end; ++i) {
-            if (data_[i] * 2 <= dataset_median) {
+            if (data_[i] * 1.84 <= dataset_median) {
                 return true;
             }
         }
@@ -504,7 +504,7 @@ void Pile::find_repetitive_hills(uint16_t dataset_median) {
         dataset_median = std::max(dataset_median, p10_);
     }
 
-    auto slope_regions = find_slopes(1.5);
+    auto slope_regions = find_slopes(1.42);
     if (slope_regions.empty()) {
         return;
     }
@@ -518,9 +518,9 @@ void Pile::find_repetitive_hills(uint16_t dataset_median) {
             return false;
         }
         bool found_peak = false;
-        uint32_t peak_value = 1.5 * std::max(data_[begin.second], data_[end.first >> 1]);
+        uint32_t peak_value = 1.42 * std::max(data_[begin.second], data_[end.first >> 1]);
         uint32_t valid_points = 0;
-        uint32_t min_value = dataset_median * 1.5;
+        uint32_t min_value = dataset_median * 1.42;
 
         for (uint32_t i = begin.second + 1; i < (end.first >> 1); ++i) {
             if (data_[i] > min_value) {
@@ -541,7 +541,6 @@ void Pile::find_repetitive_hills(uint16_t dataset_median) {
         if (!(slope_regions[i].first & 1)) {
             continue;
         }
-        bool found_hill = false;
         for (uint32_t j = i + 1; j < slope_regions.size(); ++j) {
             if (slope_regions[j].first & 1) {
                 continue;

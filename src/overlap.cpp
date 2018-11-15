@@ -16,7 +16,7 @@ Overlap::Overlap(uint64_t a_id, uint64_t b_id, double, uint32_t,
         a_length_(a_length), b_name_(), b_id_(b_id - 1), b_begin_(b_begin),
         b_end_(b_end), b_length_(b_length), length_(std::max(a_end - a_begin,
         b_end - b_begin)), orientation_(a_rc == b_rc ? 0 : 1),
-        is_transmuted_(false), is_valid_(true) {
+        is_transmuted_(false) {
 }
 
 Overlap::Overlap(const char* a_name, uint32_t a_name_length,
@@ -27,7 +27,7 @@ Overlap::Overlap(const char* a_name, uint32_t a_name_length,
         a_end_(a_end), a_length_(a_length), b_name_(b_name, b_name_length),
         b_id_(), b_begin_(b_begin), b_end_(b_end), b_length_(b_length),
         length_(overlap_length), orientation_(orientation == '+' ? 0 : 1),
-        is_transmuted_(false), is_valid_(true) {
+        is_transmuted_(false) {
 }
 
 Overlap::~Overlap() {

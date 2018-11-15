@@ -103,7 +103,7 @@ public:
 class Graph::Edge {
 public:
     // Overlap encapsulatipn
-    Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length, bool is_valid);
+    Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length);
     Edge(const Edge&) = delete;
     const Edge& operator=(const Edge&) = delete;
 
@@ -172,9 +172,9 @@ Graph::Node::Node(uint64_t id, Node* begin_node, Node* end_node)
 Graph::Node::~Node() {
 }
 
-Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length, bool is_valid)
+Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length)
         : id_(id), begin_node_(begin_node), end_node_(end_node), length_(length),
-        is_marked_(false), is_valid_(is_valid), pair_() {
+        is_marked_(false), pair_() {
 }
 
 Graph::Edge::~Edge() {
@@ -312,13 +312,13 @@ void Graph::initialize() {
             }
 
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_begin() + 15) << 1);
+                (overlaps[i]->a_begin() + 1) << 1);
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_end() - 15) << 1 | 1);
+                (overlaps[i]->a_end() - 1) << 1 | 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_begin() + 15) << 1);
+                (overlaps[i]->b_begin() + 1) << 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_end() - 15) << 1 | 1);
+                (overlaps[i]->b_end() - 1) << 1 | 1);
         }
     };
 
@@ -421,7 +421,7 @@ void Graph::initialize() {
     timer.print("[rala::Graph::initialize] elapsed time =");
 }
 
-void Graph::construct(const std::string& repeat_overlaps_path) {
+void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     if (!piles_.empty()) {
         fprintf(stderr, "[rala::Graph::construct] warning: "
@@ -433,6 +433,8 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
 
     Timer timer;
     timer.start();
+
+    preprocess(sensitive_overlaps_path);
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps, internals;
@@ -518,7 +520,7 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
     preprocess(overlaps, internals);
-    preprocess(overlaps, repeat_overlaps_path);
+    preprocess(overlaps);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -588,10 +590,10 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
 
         if (it->type(piles_) == OverlapType::kAB) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_a, node_b,
-                a_begin - b_begin, it->is_valid()));
+                a_begin - b_begin));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_b->pair_, node_a->pair_, (b_length - b_end) -
-                (a_length - a_end), it->is_valid()));
+                (a_length - a_end)));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -606,10 +608,10 @@ void Graph::construct(const std::string& repeat_overlaps_path) {
 
         } else if (it->type(piles_) == OverlapType::kBA) {
             std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
-                b_begin - a_begin, it->is_valid()));
+                b_begin - a_begin));
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_a->pair_, node_b->pair_, (a_length - a_end) -
-                (b_length - b_end), it->is_valid()));
+                (b_length - b_end)));
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -658,18 +660,7 @@ void Graph::simplify() {
         }
     }
 
-    for (auto& it: edges_) {
-        if (it == nullptr) {
-            continue;
-        }
-        if (it->is_valid_ == false) {
-            it->is_marked_ = true;
-            it->pair_->is_marked_ = true;
-            marked_edges_.emplace(it->id_);
-            marked_edges_.emplace(it->pair_->id_);
-        }
-    }
-    remove_marked_objects();
+    /*remove_long_edges();
 
     while (true) {
         uint32_t num_changes = remove_tips();
@@ -683,7 +674,7 @@ void Graph::simplify() {
         if (num_changes == 0) {
             break;
         }
-    }
+    }*/
 
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
@@ -881,8 +872,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
-void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
-    const std::string& path) {
+void Graph::preprocess(const std::string& path) {
 
     if (path.empty()) {
         return;
@@ -938,9 +928,11 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 
     for (const auto& it: sequence_ids) {
         piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
-        //piles_[it]->find_valid_region();
         piles_[it]->find_median();
     }
+}
+
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
     for (const auto& it: overlaps) {
@@ -989,12 +981,10 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         uint16_t component_median = medians[medians.size() / 2];
 
         for (const auto& it: component) {
-            if (sequence_ids.find(it) != sequence_ids.end()) {
-                thread_futures.emplace_back(thread_pool_->submit_task(
-                    [&](uint64_t i) -> void {
-                        piles_[i]->find_repetitive_hills(component_median);
-                    }, it));
-            }
+            thread_futures.emplace_back(thread_pool_->submit_task(
+                [&](uint64_t i) -> void {
+                    piles_[i]->find_repetitive_hills(component_median);
+                }, it));
         }
         for (const auto& it: thread_futures) {
             it.wait();
@@ -1002,38 +992,21 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         thread_futures.clear();
     }
 
-    for (auto& it: sensitive_overlaps) {
-        if (it->trim(piles_) == false) {
-            it.reset();
-            continue;
-        }
-        if (sequence_ids.find(it->a_id()) == sequence_ids.end()) {
-            it.reset();
-            continue;
-        }
-        bool is_valid = true;
+    for (auto& it: overlaps) {
         switch (it->type(piles_)) {
-            case OverlapType::kX:
-            case OverlapType::kB:
-            case OverlapType::kA:
-                is_valid = false;
-                break;
             case OverlapType::kAB:
             case OverlapType::kBA:
+                if (piles_[it->a_id()]->has_repetitive_hills()) {
+                    piles_[it->a_id()]->check_repetitive_hills(it);
+                }
+                if (piles_[it->b_id()]->has_repetitive_hills()) {
+                    piles_[it->b_id()]->check_repetitive_hills(it);
+                }
+                break;
             default:
                 break;
         }
-
-        if (!is_valid) {
-            it.reset();
-            continue;
-        }
-
-        if (piles_[it->b_id()]->has_repetitive_hills()) {
-            piles_[it->b_id()]->check_repetitive_hills(it);
-        }
     }
-    shrinkToFit(sensitive_overlaps, 0);
 
     for (auto& it: overlaps) {
         if (it->trim(piles_) == false) {
@@ -1042,26 +1015,10 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         }
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
             !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
-            //it->set_invalid();
             it.reset();
         }
     }
     shrinkToFit(overlaps, 0);
-
-    /*std::ofstream os("ripits.json");
-    os << "{\"piles\":{";
-    bool is_first = true;
-
-    for (const auto& it: sequence_ids) {
-        if (!is_first) {
-            os << ",";
-        }
-        is_first = false;
-        os << piles_[it]->to_json();
-    }
-
-    os << "}}";
-    os.close();*/
 }
 
 uint32_t Graph::remove_transitive_edges() {
@@ -1543,11 +1500,11 @@ uint32_t Graph::create_unitigs() {
                 marked_edges_.emplace(edge->pair_->id_);
 
                 std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
-                    edge->begin_node_, unitig.get(), edge->length_, true));
+                    edge->begin_node_, unitig.get(), edge->length_));
                 std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
                     unitig_complement.get(), edge->pair_->end_node_,
                     edge->pair_->length_ + unitig_complement->length() -
-                    begin_node->pair_->length(), true));
+                    begin_node->pair_->length()));
 
                 unitig_edge->pair_ = unitig_edge_complement.get();
                 unitig_edge_complement->pair_ = unitig_edge.get();
@@ -1573,10 +1530,10 @@ uint32_t Graph::create_unitigs() {
 
                 std::unique_ptr<Edge> unitig_edge(new Edge(edge_id++,
                     unitig.get(), edge->end_node_, edge->length_ +
-                    unitig->length() - end_node->length(), true));
+                    unitig->length() - end_node->length()));
                 std::unique_ptr<Edge> unitig_edge_complement(new Edge(edge_id++,
                     edge->pair_->begin_node_, unitig_complement.get(),
-                    edge->pair_->length_, true));
+                    edge->pair_->length_));
 
                 unitig_edge->pair_ = unitig_edge_complement.get();
                 unitig_edge_complement->pair_ = unitig_edge.get();
@@ -1644,7 +1601,7 @@ void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
         }
         contig_length.emplace_back(node->data_.size());
 
-        std::string name = ">Ctg" + std::to_string(contig_id);
+        std::string name = "Ctg" + std::to_string(contig_id);
         name += " RC:i:" + std::to_string(node->sequence_ids_.size());
         name += " LN:i:" + std::to_string(node->data_.size());
 
@@ -1667,6 +1624,40 @@ void Graph::extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
         contig_length[contig_length.size() / 2]);
     fprintf(stderr, "[rala::Graph::extract_contigs] longest contig length = %u\n",
         contig_length.back());
+}
+
+void Graph::extract_nodes(std::vector<std::unique_ptr<Sequence>>& dst) {
+
+    std::unordered_set<uint64_t> node_ids;
+    for (const auto& it: nodes_) {
+        if (it == nullptr || it->is_rc() || (it->outdegree() == 0 && it->indegree() == 0)) {
+            continue;
+        }
+
+        node_ids.emplace(it->id_);
+
+        for (const auto& edge: it->prefix_edges_) {
+            if (edge->begin_node_->is_rc()) {
+                node_ids.emplace(edge->begin_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->begin_node_->id_);
+            }
+        }
+        for (const auto& edge: it->suffix_edges_) {
+            if (edge->end_node_->is_rc()) {
+                node_ids.emplace(edge->end_node_->pair_->id_);
+            } else {
+                node_ids.emplace(edge->end_node_->id_);
+            }
+        }
+    }
+
+    for (const auto& it: node_ids) {
+        dst.emplace_back(createSequence(nodes_[it]->name_, nodes_[it]->data_));
+    }
+
+    fprintf(stderr, "[rala::Graph::extract_nodes] number of nodes = %zu\n",
+        dst.size());
 }
 
 void Graph::remove_marked_objects(bool remove_nodes) {
@@ -1709,7 +1700,7 @@ void Graph::print_csv(const std::string& path) const {
     auto graph_file = fopen(path.c_str(), "w");
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || !it->is_rc()) {
+        if (it == nullptr || !it->is_rc() || (it->outdegree() == 0 && it->indegree() == 0)) {
             continue;
         }
         fprintf(graph_file, "%lu LN:i:%u RC:i:%lu,%lu LN:i:%u RC:i:%lu,0,-\n",
@@ -1738,7 +1729,7 @@ void Graph::print_gfa(const std::string& path) const {
     uint32_t unitig_id = 0;
 
     for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc()) {
+        if (it == nullptr || it->is_rc() || (it->outdegree() == 0 && it->indegree() == 0)) {
             continue;
         }
         if (it->name_.empty()) {
@@ -1847,43 +1838,6 @@ void Graph::print_json(const std::string& path) const {
     }
 
     os << "}}";
-    os.close();
-}
-
-void Graph::print_fasta(const std::string& path) const {
-
-    std::unordered_set<uint64_t> node_ids;
-
-    for (const auto& it: nodes_) {
-        if (it == nullptr || it->is_rc() || (it->outdegree() == 0 && it->indegree() == 0)) {
-            continue;
-        }
-
-        node_ids.emplace(it->id_);
-
-        for (const auto& edge: it->prefix_edges_) {
-            if (edge->begin_node_->is_rc()) {
-                node_ids.emplace(edge->begin_node_->pair_->id_);
-            } else {
-                node_ids.emplace(edge->begin_node_->id_);
-            }
-        }
-        for (const auto& edge: it->suffix_edges_) {
-            if (edge->end_node_->is_rc()) {
-                node_ids.emplace(edge->end_node_->pair_->id_);
-            } else {
-                node_ids.emplace(edge->end_node_->id_);
-            }
-        }
-    }
-
-    std::ofstream os(path);
-
-    for (const auto& it: node_ids) {
-        os << ">" << nodes_[it]->name_ << std::endl;
-        os << nodes_[it]->data_ << std::endl;
-    }
-
     os.close();
 }
 
