@@ -390,10 +390,6 @@ void Graph::initialize() {
             [&](uint64_t i) -> void {
                 if (piles_[i]->find_valid_region() == false) {
                     piles_[i].reset();
-                } else {
-                    piles_[i]->find_median();
-                    piles_[i]->find_chimeric_hills();
-                    piles_[i]->find_chimeric_pits();
                 }
             }, it->id()));
     }
@@ -434,7 +430,26 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
     Timer timer;
     timer.start();
 
-    preprocess(sensitive_overlaps_path);
+    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
+    preprocess(sensitive_overlaps, sensitive_overlaps_path);
+
+    std::vector<std::future<void>> thread_futures;
+    for (const auto& it: piles_) {
+        if (it == nullptr) {
+            continue;
+        }
+
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint64_t i) -> void {
+                piles_[i]->find_median();
+                piles_[i]->find_chimeric_hills();
+                piles_[i]->find_chimeric_pits();
+            }, it->id()));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps, internals;
@@ -519,8 +534,9 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
-    preprocess(overlaps, internals);
-    preprocess(overlaps, sensitive_overlaps_path);
+    preprocess_chimaeras(overlaps, internals);
+    preprocess_repeats(overlaps, sensitive_overlaps);
+    std::vector<std::unique_ptr<Overlap>>().swap(sensitive_overlaps);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -687,7 +703,85 @@ void Graph::simplify() {
     timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
-void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& dst,
+    const std::string& path) {
+
+    if (path.empty()) {
+        return;
+    }
+
+    Timer timer;
+    timer.start();
+
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
+
+    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
+        if (src.size() < suffix.size()) {
+            return false;
+        }
+        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
+        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
+    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
+        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
+    } else {
+        fprintf(stderr, "[rala::preprocess] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
+        exit(1);
+    }
+
+    uint64_t num_sequences = 0;
+    std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
+    std::vector<std::vector<uint32_t>> overlap_bounds;
+
+    while (true) {
+        uint64_t l = dst.size();
+        auto status = oparser->parse_objects(dst, kChunkSize);
+
+        for (uint64_t i = l; i < dst.size(); ++i) {
+            dst[i]->transmute_(piles_, name_to_id_);
+            if (sequence_id_to_id.find(dst[i]->b_id()) == sequence_id_to_id.end()) {
+                sequence_id_to_id[dst[i]->b_id()] = num_sequences++;
+            }
+        }
+        overlap_bounds.resize(num_sequences);
+
+        for (uint64_t i = l; i < dst.size(); ++i) {
+            overlap_bounds[sequence_id_to_id[dst[i]->b_id()]].emplace_back(
+                dst[i]->b_begin() << 1);
+            overlap_bounds[sequence_id_to_id[dst[i]->b_id()]].emplace_back(
+                dst[i]->b_end() << 1 | 1);
+
+            if (dst[i]->trim(piles_) == false) {
+                dst[i].reset();
+            }
+        }
+        shrinkToFit(dst, l);
+
+        std::vector<std::future<void>> thread_futures;
+        for (const auto& it: sequence_id_to_id) {
+            thread_futures.emplace_back(thread_pool_->submit_task(
+                [&](uint64_t i) -> void {
+                    piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
+                }, it.first));
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+
+        if (!status) {
+            break;
+        }
+    }
+
+    timer.stop();
+    timer.print("[rala::Graph::preprocess] elapsed time =");
+}
+
+void Graph::preprocess_chimaeras(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::unique_ptr<Overlap>>& internals) {
 
     Timer timer;
@@ -869,75 +963,18 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     shrinkToFit(overlaps, 0);
 
     timer.stop();
-    timer.print("[rala::Graph::preprocess] elapsed time =");
+    timer.print("[rala::Graph::preprocess_chimaeras] elapsed time =");
 }
 
-void Graph::preprocess(const std::string& path) {
+void Graph::preprocess_repeats(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    const std::vector<std::unique_ptr<Overlap>>& sensitive_overlaps) {
 
-    if (path.empty()) {
+    if (sensitive_overlaps.empty()) {
         return;
     }
 
-    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
-
-    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
-        if (src.size() < suffix.size()) {
-            return false;
-        }
-        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-
-    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
-        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
-    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
-        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
-    } else {
-        fprintf(stderr, "[rala::preprocess] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
-        exit(1);
-    }
-
-    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
-    oparser->parse_objects(sensitive_overlaps, -1);
-
-    std::unordered_set<uint64_t> sequence_ids;
-    for (auto& it: sensitive_overlaps) {
-        it->transmute_(piles_, name_to_id_);
-        sequence_ids.emplace(it->b_id());
-    }
-
-    std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
-    uint64_t num_sequences = 0;
-    for (const auto& it: sequence_ids) {
-        sequence_id_to_id[it] = num_sequences++;
-        if (piles_[it] == nullptr) {
-            fprintf(stderr, "[rala::preprocess] error: missing pile!\n");
-            exit(1);
-        }
-        piles_[it]->clear();
-    }
-
-    std::vector<std::vector<uint32_t>> overlap_bounds(num_sequences);
-    for (const auto& it: sensitive_overlaps) {
-        overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
-            it->b_begin() << 1);
-        overlap_bounds[sequence_id_to_id[it->b_id()]].emplace_back(
-            it->b_end() << 1 | 1);
-    }
-
-    for (const auto& it: sequence_ids) {
-        piles_[it]->add_layers(overlap_bounds[sequence_id_to_id[it]]);
-        piles_[it]->find_median();
-    }
-}
-
-void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
-    const std::string& path) {
-
-    if (path.empty()) {
-        return;
-    }
+    Timer timer;
+    timer.start();
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
     for (const auto& it: overlaps) {
@@ -997,31 +1034,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         thread_futures.clear();
     }
 
-    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
-
-    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
-        if (src.size() < suffix.size()) {
-            return false;
-        }
-        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-
-    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
-        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
-    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
-        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
-    } else {
-        fprintf(stderr, "[rala::preprocess] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
-        exit(1);
-    }
-
-    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
-    oparser->parse_objects(sensitive_overlaps, -1);
-
     for (auto& it: sensitive_overlaps) {
-        it->transmute_(piles_, name_to_id_);
         if (it->trim(piles_) == false) {
             continue;
         }
@@ -1048,6 +1061,9 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         }
     }
     shrinkToFit(overlaps, 0);
+
+    timer.stop();
+    timer.print("[rala::Graph::preprocess_repeats] elapsed time =");
 }
 
 uint32_t Graph::remove_transitive_edges() {

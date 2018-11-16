@@ -120,21 +120,22 @@ private:
     void initialize();
 
     /*!
+     * @brief Updates piles with more sensitive overlaps and stores them in dst
+     */
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& dst,
+        const std::string& path);
+
+    /*!
      * @brief Cleanses chimeric sequences
      */
-    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    void preprocess_chimaeras(std::vector<std::unique_ptr<Overlap>>& overlaps,
         std::vector<std::unique_ptr<Overlap>>& internals);
 
     /*!
      * @brief Removes overlaps between repetitive sequences
      */
-    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
-        const std::string& path);
-
-    /*!
-     * @brief Updates piles with more sensitive overlaps
-     */
-    void preprocess(const std::string& path);
+    void preprocess_repeats(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        const std::vector<std::unique_ptr<Overlap>>& sensitive_overlaps);
 
     uint64_t find_edge(uint64_t src, uint64_t dst);
 
