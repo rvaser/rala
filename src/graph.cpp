@@ -520,7 +520,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
     preprocess(overlaps, internals);
-    preprocess(overlaps);
+    preprocess(overlaps, sensitive_overlaps_path);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -932,7 +932,12 @@ void Graph::preprocess(const std::string& path) {
     }
 }
 
-void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    const std::string& path) {
+
+    if (path.empty()) {
+        return;
+    }
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
     for (const auto& it: overlaps) {
@@ -992,13 +997,37 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
         thread_futures.clear();
     }
 
-    for (auto& it: overlaps) {
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
+
+    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
+        if (src.size() < suffix.size()) {
+            return false;
+        }
+        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
+        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
+    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
+        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
+    } else {
+        fprintf(stderr, "[rala::preprocess] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
+        exit(1);
+    }
+
+    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
+    oparser->parse_objects(sensitive_overlaps, -1);
+
+    for (auto& it: sensitive_overlaps) {
+        it->transmute_(piles_, name_to_id_);
+        if (it->trim(piles_) == false) {
+            continue;
+        }
         switch (it->type(piles_)) {
             case OverlapType::kAB:
             case OverlapType::kBA:
-                if (piles_[it->a_id()]->has_repetitive_hills()) {
-                    piles_[it->a_id()]->check_repetitive_hills(it);
-                }
                 if (piles_[it->b_id()]->has_repetitive_hills()) {
                     piles_[it->b_id()]->check_repetitive_hills(it);
                 }

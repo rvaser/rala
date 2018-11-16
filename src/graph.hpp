@@ -128,7 +128,8 @@ private:
     /*!
      * @brief Removes overlaps between repetitive sequences
      */
-    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps);
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        const std::string& path);
 
     /*!
      * @brief Updates piles with more sensitive overlaps
