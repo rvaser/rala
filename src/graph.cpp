@@ -312,13 +312,13 @@ void Graph::initialize() {
             }
 
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_begin() + 1) << 1);
+                (overlaps[i]->a_begin() + 15) << 1);
             overlap_bounds[overlaps[i]->a_id()].emplace_back(
-                (overlaps[i]->a_end() - 1) << 1 | 1);
+                (overlaps[i]->a_end() - 15) << 1 | 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_begin() + 1) << 1);
+                (overlaps[i]->b_begin() + 15) << 1);
             overlap_bounds[overlaps[i]->b_id()].emplace_back(
-                (overlaps[i]->b_end() - 1) << 1 | 1);
+                (overlaps[i]->b_end() - 15) << 1 | 1);
         }
     };
 
