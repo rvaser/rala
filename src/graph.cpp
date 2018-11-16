@@ -402,6 +402,23 @@ void Graph::initialize() {
     }
     thread_futures.clear();
 
+    std::ofstream os("chimeric.json");
+    os << "{\"piles\":{";
+    bool is_first = true;
+
+    for (const auto& it: piles_) {
+        if (it != nullptr && it->has_chimeric_region()) {
+            if (!is_first) {
+                os << ",";
+            }
+            is_first = false;
+            os << it->to_json();
+        }
+    }
+    os << "}}";
+    os.close();
+    exit(1);
+
     uint64_t num_prefiltered_sequences = 0;
     for (const auto& it: piles_) {
         if (it == nullptr) {
