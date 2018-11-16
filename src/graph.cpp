@@ -676,7 +676,7 @@ void Graph::simplify() {
         }
     }
 
-    /*remove_long_edges();
+    remove_long_edges();
 
     while (true) {
         uint32_t num_changes = remove_tips();
@@ -690,7 +690,7 @@ void Graph::simplify() {
         if (num_changes == 0) {
             break;
         }
-    }*/
+    }
 
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
@@ -763,10 +763,13 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& dst,
 
         std::vector<std::future<void>> thread_futures;
         for (const auto& it: sequence_id_to_id) {
-            thread_futures.emplace_back(thread_pool_->submit_task(
-                [&](uint64_t i) -> void {
-                    piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
-                }, it.first));
+            if (!overlap_bounds[sequence_id_to_id[it.first]].empty()) {
+                thread_futures.emplace_back(thread_pool_->submit_task(
+                    [&](uint64_t i) -> void {
+                        piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
+                        std::vector<uint32_t>().swap(overlap_bounds[sequence_id_to_id[i]]);
+                    }, it.first));
+            }
         }
         for (const auto& it: thread_futures) {
             it.wait();
@@ -1126,7 +1129,7 @@ uint32_t Graph::remove_long_edges() {
                     continue;
                 }
                 if (node->length() - other_edge->length_ <
-                    (node->length() - edge->length_) * 0.9) {
+                    (node->length() - edge->length_) * 0.588) {
 
                     other_edge->is_marked_ = true;
                     other_edge->pair_->is_marked_ = true;
