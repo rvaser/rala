@@ -390,6 +390,10 @@ void Graph::initialize() {
             [&](uint64_t i) -> void {
                 if (piles_[i]->find_valid_region() == false) {
                     piles_[i].reset();
+                } else {
+                    piles_[i]->find_median();
+                    piles_[i]->find_chimeric_hills();
+                    piles_[i]->find_chimeric_pits();
                 }
             }, it->id()));
     }
@@ -429,27 +433,6 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     Timer timer;
     timer.start();
-
-    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
-    preprocess(sensitive_overlaps, sensitive_overlaps_path);
-
-    std::vector<std::future<void>> thread_futures;
-    for (const auto& it: piles_) {
-        if (it == nullptr) {
-            continue;
-        }
-
-        thread_futures.emplace_back(thread_pool_->submit_task(
-            [&](uint64_t i) -> void {
-                piles_[i]->find_median();
-                piles_[i]->find_chimeric_hills();
-                piles_[i]->find_chimeric_pits();
-            }, it->id()));
-    }
-    for (const auto& it: thread_futures) {
-        it.wait();
-    }
-    thread_futures.clear();
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps, internals;
@@ -534,9 +517,8 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
 
-    preprocess_chimaeras(overlaps, internals);
-    preprocess_repeats(overlaps, sensitive_overlaps);
-    std::vector<std::unique_ptr<Overlap>>().swap(sensitive_overlaps);
+    preprocess(overlaps, internals);
+    preprocess(overlaps, sensitive_overlaps_path);
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -703,88 +685,7 @@ void Graph::simplify() {
     timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
-void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& dst,
-    const std::string& path) {
-
-    if (path.empty()) {
-        return;
-    }
-
-    Timer timer;
-    timer.start();
-
-    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
-
-    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
-        if (src.size() < suffix.size()) {
-            return false;
-        }
-        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
-    };
-
-    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
-        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
-    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
-        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
-    } else {
-        fprintf(stderr, "[rala::preprocess] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
-        exit(1);
-    }
-
-    uint64_t num_sequences = 0;
-    std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
-    std::vector<std::vector<uint32_t>> overlap_bounds;
-
-    while (true) {
-        uint64_t l = dst.size();
-        auto status = oparser->parse_objects(dst, kChunkSize);
-
-        for (uint64_t i = l; i < dst.size(); ++i) {
-            dst[i]->transmute_(piles_, name_to_id_);
-            if (sequence_id_to_id.find(dst[i]->b_id()) == sequence_id_to_id.end()) {
-                sequence_id_to_id[dst[i]->b_id()] = num_sequences++;
-            }
-        }
-        overlap_bounds.resize(num_sequences);
-
-        for (uint64_t i = l; i < dst.size(); ++i) {
-            overlap_bounds[sequence_id_to_id[dst[i]->b_id()]].emplace_back(
-                dst[i]->b_begin() << 1);
-            overlap_bounds[sequence_id_to_id[dst[i]->b_id()]].emplace_back(
-                dst[i]->b_end() << 1 | 1);
-
-            if (dst[i]->trim(piles_) == false) {
-                dst[i].reset();
-            }
-        }
-        shrinkToFit(dst, l);
-
-        std::vector<std::future<void>> thread_futures;
-        for (const auto& it: sequence_id_to_id) {
-            if (!overlap_bounds[sequence_id_to_id[it.first]].empty()) {
-                thread_futures.emplace_back(thread_pool_->submit_task(
-                    [&](uint64_t i) -> void {
-                        piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
-                        std::vector<uint32_t>().swap(overlap_bounds[sequence_id_to_id[i]]);
-                    }, it.first));
-            }
-        }
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-
-        if (!status) {
-            break;
-        }
-    }
-
-    timer.stop();
-    timer.print("[rala::Graph::preprocess] elapsed time =");
-}
-
-void Graph::preprocess_chimaeras(std::vector<std::unique_ptr<Overlap>>& overlaps,
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::unique_ptr<Overlap>>& internals) {
 
     Timer timer;
@@ -966,18 +867,98 @@ void Graph::preprocess_chimaeras(std::vector<std::unique_ptr<Overlap>>& overlaps
     shrinkToFit(overlaps, 0);
 
     timer.stop();
-    timer.print("[rala::Graph::preprocess_chimaeras] elapsed time =");
+    timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
-void Graph::preprocess_repeats(std::vector<std::unique_ptr<Overlap>>& overlaps,
-    const std::vector<std::unique_ptr<Overlap>>& sensitive_overlaps) {
+void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+    const std::string& path) {
 
-    if (sensitive_overlaps.empty()) {
+    if (path.empty()) {
         return;
     }
 
     Timer timer;
     timer.start();
+
+    std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
+
+    auto is_suffix = [](const std::string& src, const std::string& suffix) -> bool {
+        if (src.size() < suffix.size()) {
+            return false;
+        }
+        return src.compare(src.size() - suffix.size(), suffix.size(), suffix) == 0;
+    };
+
+    if (is_suffix(path, ".mhap") || is_suffix(path, ".mhap.gz")) {
+        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(path);
+    } else if (is_suffix(path, ".paf") || is_suffix(path, ".paf.gz")) {
+        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(path);
+    } else {
+        fprintf(stderr, "[rala::preprocess] error: "
+            "file %s has unsupported format extension (valid extensions: "
+            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", path.c_str());
+        exit(1);
+    }
+
+    uint64_t num_sequences = 0;
+    std::unordered_map<uint64_t, uint64_t> sequence_id_to_id;
+    std::vector<std::vector<uint32_t>> overlap_bounds;
+    std::vector<std::unique_ptr<Overlap>> sensitive_overlaps;
+
+    std::vector<std::future<void>> thread_futures;
+    while (true) {
+        uint64_t l = sensitive_overlaps.size();
+        auto status = oparser->parse_objects(sensitive_overlaps, kChunkSize);
+
+        for (uint64_t i = l; i < sensitive_overlaps.size(); ++i) {
+            sensitive_overlaps[i]->transmute_(piles_, name_to_id_);
+            if (sequence_id_to_id.find(sensitive_overlaps[i]->b_id()) == sequence_id_to_id.end()) {
+                sequence_id_to_id[sensitive_overlaps[i]->b_id()] = num_sequences++;
+            }
+        }
+        overlap_bounds.resize(num_sequences);
+
+        for (uint64_t i = l; i < sensitive_overlaps.size(); ++i) {
+            overlap_bounds[sequence_id_to_id[sensitive_overlaps[i]->b_id()]].emplace_back(
+                sensitive_overlaps[i]->b_begin() << 1);
+            overlap_bounds[sequence_id_to_id[sensitive_overlaps[i]->b_id()]].emplace_back(
+                sensitive_overlaps[i]->b_end() << 1 | 1);
+
+            if (sensitive_overlaps[i]->trim(piles_) == false) {
+                sensitive_overlaps[i].reset();
+            }
+        }
+        shrinkToFit(sensitive_overlaps, l);
+
+        for (const auto& it: sequence_id_to_id) {
+            if (!overlap_bounds[sequence_id_to_id[it.first]].empty()) {
+                thread_futures.emplace_back(thread_pool_->submit_task(
+                    [&](uint64_t i) -> void {
+                        piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
+                        std::vector<uint32_t>().swap(overlap_bounds[sequence_id_to_id[i]]);
+                    }, it.first));
+            }
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
+
+        if (!status) {
+            break;
+        }
+    }
+
+    for (const auto& it: sequence_id_to_id) {
+        thread_futures.emplace_back(thread_pool_->submit_task(
+            [&](uint64_t i) -> void {
+                piles_[i]->find_median();
+            }, it.first));
+    }
+    for (const auto& it: thread_futures) {
+        it.wait();
+    }
+    thread_futures.clear();
 
     std::vector<std::vector<uint64_t>> connections(piles_.size());
     for (const auto& it: overlaps) {
@@ -1014,7 +995,6 @@ void Graph::preprocess_repeats(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::vector<uint64_t>>().swap(connections);
     std::vector<bool>().swap(is_visited);
 
-    std::vector<std::future<void>> thread_futures;
     for (const auto& component: components) {
 
         std::vector<uint16_t> medians;
@@ -1066,7 +1046,7 @@ void Graph::preprocess_repeats(std::vector<std::unique_ptr<Overlap>>& overlaps,
     shrinkToFit(overlaps, 0);
 
     timer.stop();
-    timer.print("[rala::Graph::preprocess_repeats] elapsed time =");
+    timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
 uint32_t Graph::remove_transitive_edges() {
@@ -1129,7 +1109,7 @@ uint32_t Graph::remove_long_edges() {
                     continue;
                 }
                 if (node->length() - other_edge->length_ <
-                    (node->length() - edge->length_) * 0.588) {
+                    (node->length() - edge->length_) * 0.238) {
 
                     other_edge->is_marked_ = true;
                     other_edge->pair_->is_marked_ = true;
