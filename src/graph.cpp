@@ -417,7 +417,6 @@ void Graph::initialize() {
     }
     os << "}}";
     os.close();
-    exit(1);
 
     uint64_t num_prefiltered_sequences = 0;
     for (const auto& it: piles_) {
@@ -1024,6 +1023,35 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
                 break;
         }
     }
+
+    std::ofstream os("repeats.json");
+    os << "{\"piles\":{";
+    bool is_first = true;
+
+    std::ofstream os2("normal.json");
+    os2 << "{\"piles\":{";
+    bool is_first2 = true;
+
+    for (const auto& it: piles_) {
+        if (it != nullptr && it->has_repetitive_hills()) {
+            if (!is_first) {
+                os << ",";
+            }
+            is_first = false;
+            os << it->to_json();
+        } else if (it != nullptr && !it->has_chimeric_region()) {
+            if (!is_first2) {
+                os2 << ",";
+            }
+            is_first2 = false;
+            os2 << it->to_json();
+        }
+    }
+    os << "}}";
+    os.close();
+    os2 << "}}";
+    os2.close();
+    exit(1);
 
     for (auto& it: overlaps) {
         if (it->trim(piles_) == false) {
