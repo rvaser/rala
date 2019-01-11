@@ -117,8 +117,8 @@ public:
     Node* begin_node_;
     Node* end_node_;
     uint32_t length_;
+    double weight_;
     bool is_marked_;
-    bool is_valid_;
     Edge* pair_;
 };
 
@@ -174,7 +174,7 @@ Graph::Node::~Node() {
 
 Graph::Edge::Edge(uint64_t id, Node* begin_node, Node* end_node, uint32_t length)
         : id_(id), begin_node_(begin_node), end_node_(end_node), length_(length),
-        is_marked_(false), pair_() {
+        weight_(0), is_marked_(false), pair_() {
 }
 
 Graph::Edge::~Edge() {
@@ -232,7 +232,7 @@ Graph::Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
         : sparser_(std::move(sparser)), name_to_id_(), piles_(),
         coverage_median_(0), oparser_(std::move(oparser)), is_valid_overlap_(),
         thread_pool_(thread_pool::createThreadPool(num_threads)),
-        nodes_(), edges_() {
+        nodes_(), edges_(), marked_edges_(), transitive_edges_() {
 }
 
 Graph::~Graph() {
@@ -658,7 +658,8 @@ void Graph::simplify() {
         }
     }
 
-    remove_long_edges();
+    postprocess();
+    uint32_t num_long_edges = remove_long_edges();
 
     while (true) {
         uint32_t num_changes = remove_tips();
@@ -680,6 +681,8 @@ void Graph::simplify() {
         num_tips);
     fprintf(stderr, "[rala::Graph::simplify] number of bubbles = %u\n",
         num_bubbles);
+    fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
+        num_long_edges);
 
     timer.stop();
     timer.print("[rala::Graph::simplify] elapsed time =");
@@ -1049,6 +1052,199 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     timer.print("[rala::Graph::preprocess] elapsed time =");
 }
 
+void Graph::postprocess() {
+
+    std::vector<std::unordered_set<uint64_t>> components;
+    std::vector<bool> is_visited(piles_.size(), false);
+    for (uint64_t i = 0; i < nodes_.size(); ++i) {
+        if (nodes_[i] == nullptr || is_visited[i]) {
+            continue;
+        }
+
+        components.resize(components.size() + 1);
+
+        std::deque<uint64_t> que = { i };
+        while (!que.empty()) {
+            uint64_t j = que.front();
+            que.pop_front();
+
+            if (is_visited[j]) {
+                continue;
+            }
+            const auto& node = nodes_[j];
+            is_visited[node->id_] = true;
+            is_visited[node->pair_->id_] = true;
+            components.back().emplace((node->id_ >> 1) << 1);
+
+            for (const auto& it: node->prefix_edges_) {
+                que.emplace_back(it->begin_node_->id_);
+            }
+            for (const auto& it: node->suffix_edges_) {
+                que.emplace_back(it->end_node_->id_);
+            }
+        }
+    }
+    std::vector<bool>().swap(is_visited);
+
+    std::sort(components.begin(), components.end(),
+        [](const std::unordered_set<uint64_t>& lhs, const std::unordered_set<uint64_t>& rhs) {
+            return lhs.size() > rhs.size();
+        }
+    );
+
+    std::mt19937 generator(std::random_device{}());
+    std::uniform_real_distribution<> distribution(0.0, 1.0);
+
+    using point = std::pair<double, double>;
+
+    //uint32_t c = 0;
+    for (const auto& component: components) {
+
+        if (component.size() < 6) continue;
+
+        uint32_t num_iterations = 1000;
+        double k = sqrt(1.0 / static_cast<double>(component.size()));
+        double t = 0.1;
+        double dt = t / static_cast<double>(num_iterations + 1);
+
+        auto add = [](const point& x, const point& y) {
+            return std::make_pair(x.first + y.first, x.second + y.second);
+        };
+        auto substract = [](const point& x, const point& y) {
+           return std::make_pair(x.first - y.first, x.second - y.second);
+        };
+        auto multiply = [](const point& x, double s) {
+            return std::make_pair(x.first * s, x.second * s);
+        };
+        auto norm = [](const point& x) {
+            return sqrt(x.first * x.first + x.second * x.second);
+        };
+
+        std::vector<point> points(nodes_.size());
+        for (const auto& it: component) {
+            points[it].first = distribution(generator);
+            points[it].second = distribution(generator);
+        }
+
+        uint32_t i = 0;
+        while (i < num_iterations) {
+            std::vector<std::future<void>> thread_futures;
+            std::vector<point> displacements(nodes_.size());
+
+            auto thread_task = [&](uint64_t n) -> void {
+                point displacement = {0, 0};
+                for (const auto& m: component) {
+                    if (n == m) continue;
+                    auto delta = substract(points[n], points[m]);
+                    auto distance = norm(delta);
+                    if (distance < 0.01) {
+                        distance = 0.01;
+                    }
+                    displacement = add(displacement, multiply(delta, (k) / (distance * distance)));
+                }
+               for (const auto& e: nodes_[n]->prefix_edges_) {
+                    auto m = (e->begin_node_->id_ >> 1) << 1;
+                    auto delta = substract(points[n], points[m]);
+                    auto distance = norm(delta);
+                    if (distance < 0.01) {
+                        distance = 0.01;
+                    }
+                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                }
+                for (const auto& e: nodes_[n]->suffix_edges_) {
+                    auto m = (e->end_node_->id_ >> 1) << 1;
+                    auto delta = substract(points[n], points[m]);
+                    auto distance = norm(delta);
+                    if (distance < 0.01) {
+                        distance = 0.01;
+                    }
+                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                }
+                bool found = false;
+                for (const auto& e: transitive_edges_) {
+                    if (e.first != n) {
+                        if (found) break;
+                        continue;
+                    }
+                    found = true;
+                    auto m = e.second;
+                    if (component.find(m) == component.end()) continue;
+
+                    auto delta = substract(points[n], points[m]);
+                    auto distance = norm(delta);
+                    if (distance < 0.01) {
+                        distance = 0.01;
+                    }
+                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                }
+
+                auto length = norm(displacement);
+                if (length < 0.01) {
+                    length = 0.1;
+                }
+                displacements[n] = add(displacements[n], multiply(displacement, t / length));
+                return;
+            };
+
+            for (const auto& n: component) {
+                thread_futures.emplace_back(thread_pool_->submit_task(thread_task, n));
+            }
+            for (const auto& it: thread_futures) {
+                it.wait();
+            }
+            for (const auto& n: component) {
+                points[n] = add(points[n], displacements[n]);
+            }
+
+            t -= dt;
+            ++i;
+        }
+
+        for (const auto& it: edges_) {
+            if (it == nullptr || it->id_ & 1) {
+                continue;
+            }
+            auto n = (it->begin_node_->id_ >> 1) << 1;
+            auto m = (it->end_node_->id_ >> 1) << 1;
+
+            if (component.find(n) != component.end() &&
+                component.find(m) != component.end()) {
+                it->weight_ = norm(substract(points[n], points[m]));
+                it->pair_->weight_ = it->weight_;
+            }
+        }
+
+        /*
+        std::ofstream g("g" + std::to_string(c) + ".csv");
+        std::ofstream p("p" + std::to_string(c) + ".csv");
+        ++c;
+
+        for (const auto& it: component) {
+            p << it << "," << points[it].first << "," << points[it].second << std::endl;
+            for (const auto& e: nodes_[it]->prefix_edges_) {
+                auto o = (e->begin_node_->id_ >> 1) << 1;
+                g << it << "," << o << std::endl;
+            }
+            for (const auto& e: nodes_[it]->suffix_edges_) {
+                auto o = (e->end_node_->id_ >> 1) << 1;
+                g << it << "," << o << std::endl;
+            }
+            for (const auto& e: transitive_edges_) {
+                if (component.find(e.first) != component.end() &&
+                    component.find(e.second) != component.end()) {
+                    g << e.first << "," << e.second << std::endl;
+                }
+            }
+        }
+
+        p.close();
+        g.close();
+        */
+    }
+
+    return;
+}
+
 uint32_t Graph::remove_transitive_edges() {
 
     uint32_t num_transitive_edges = 0;
@@ -1088,6 +1284,18 @@ uint32_t Graph::remove_transitive_edges() {
         }
     }
 
+    for (const auto& it: marked_edges_) {
+        if (it & 1) {
+            transitive_edges_.emplace_back(
+                (edges_[it]->begin_node_->id_ >> 1) << 1,
+                (edges_[it]->end_node_->id_ >> 1) << 1);
+            transitive_edges_.emplace_back(
+                transitive_edges_.back().second,
+                transitive_edges_.back().first);
+        }
+    }
+    std::sort(transitive_edges_.begin(), transitive_edges_.end());
+
     remove_marked_objects();
 
     return num_transitive_edges;
@@ -1108,9 +1316,9 @@ uint32_t Graph::remove_long_edges() {
                     other_edge->is_marked_) {
                     continue;
                 }
-                if (node->length() - other_edge->length_ <
-                    (node->length() - edge->length_) * 0.238) {
-
+                //if (node->length() - other_edge->length_ <
+                //    (node->length() - edge->length_) * 0.238) {
+                if (edge->weight_ * 2 < other_edge->weight_) {
                     other_edge->is_marked_ = true;
                     other_edge->pair_->is_marked_ = true;
                     marked_edges_.emplace(other_edge->id_);
@@ -1740,10 +1948,10 @@ void Graph::print_csv(const std::string& path) const {
         if (it == nullptr) {
             continue;
         }
-        fprintf(graph_file, "%lu LN:i:%u RC:i:%lu,%lu LN:i:%u RC:i:%lu,1,%lu %u\n",
+        fprintf(graph_file, "%lu LN:i:%u RC:i:%lu,%lu LN:i:%u RC:i:%lu,1,%lu %u %lf\n",
             it->begin_node_->id_, it->begin_node_->length(), it->begin_node_->sequence_ids_.size(),
             it->end_node_->id_, it->end_node_->length(), it->end_node_->sequence_ids_.size(),
-            it->id_, it->length_);
+            it->id_, it->length_, it->weight_);
     }
 
     fclose(graph_file);

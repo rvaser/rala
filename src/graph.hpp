@@ -131,6 +131,11 @@ private:
     void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         const std::string& path);
 
+    /*!
+     * @brief Calculates the edge weights from a Fruchterman-Reingold layout
+     */
+    void postprocess();
+
     uint64_t find_edge(uint64_t src, uint64_t dst);
 
     /*!
@@ -159,6 +164,7 @@ private:
     std::vector<std::unique_ptr<Node>> nodes_;
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_set<uint64_t> marked_edges_;
+    std::vector<std::pair<uint64_t, uint64_t>> transitive_edges_;
 };
 
 }
