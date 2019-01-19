@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 
 from __future__ import print_function
-import os, sys, argparse, json, matplotlib.pyplot
+import os, sys, argparse, json, matplotlib.pyplot, seaborn
+
+seaborn.set()
+seaborn.set_style("white")
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -30,19 +33,23 @@ class Plotter:
             eprint("[rala::Plotter::plot_pile] error: incomplete pile!")
             sys.exit(1);
 
-        x = xrange(len(pile["y"]))
+        scpg = seaborn.cubehelix_palette(rot=-.4)
+        scpr = seaborn.color_palette("Reds")
+
+        x = range(len(pile["y"]))
         ax.set_ylim([0, ylimit])
+        seaborn.despine()
 
         if (orientation == 0):
-            ax.plot(x, pile["y"], label="y")
+            ax.plot(x, pile["y"], label="y", color=scpg[2])
             for slope in pile["h"]:
-                ax.axvline(slope, color="r", linestyle=":")
+                ax.axvline(slope, color=scpr[2], linestyle=":")
             begin = pile["b"]
             end = pile["e"]
         else:
-            ax.plot(x, list(reversed(pile["y"])), label="y")
+            ax.plot(x, list(reversed(pile["y"])), label="y", color=scpg[2])
             for slope in pile["h"]:
-                ax.axvline(len(x) - slope, color="r", linestyle=":")
+                ax.axvline(len(x) - slope, color=scpr[2], linestyle=":")
             begin = len(x) - pile["e"]
             end = len(x) - pile["b"]
 
@@ -51,8 +58,8 @@ class Plotter:
         else:
             ax.axvline(end - overlap_length, label="o", color="k", linestyle="--")
 
-        ax.axhline(int(pile["m"]), label="m", color="m", linestyle=":")
-        ax.axhline(int(pile["p10"]), label="p10", color="c", linestyle=":")
+        ax.axhline(int(pile["m"]), label="m", color=scpg[1], linestyle=":")
+        ax.axhline(int(pile["p10"]), label="p10", color=scpg[0], linestyle=":")
         ax.set_title(title)
 
     def run(self):

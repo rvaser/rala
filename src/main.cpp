@@ -88,7 +88,6 @@ int main(int argc, char** argv) {
 
     std::vector<std::unique_ptr<rala::Sequence>> contigs;
     graph->extract_contigs(contigs, drop_unassembled_sequences);
-    graph->print_gfa("rala_assembly_graph.gfa");
 
     for (const auto& it: contigs) {
         fprintf(stdout, ">%s\n%s\n", it->name().c_str(), it->data().c_str());
@@ -111,13 +110,13 @@ void help() {
         "    options:\n"
         "        -p, --preconstruct\n"
         "            print uncontained sequences for second iteration\n"
+        "        -s, --sensitive-overlaps <file>\n"
+        "            input file in MHAP/PAF format (can be compress with gzip)\n"
+        "            containing more sensitive overlaps\n"
         "        -u, --include-unassembled\n"
         "            output unassembled sequences (singletons and short contigs)\n"
         "        -d, --debug <string>\n"
         "            enable debug output with given prefix\n"
-        "        -s, --sensitive-overlaps <file>\n"
-        "            input file in MHAP/PAF format (can be compress with gzip)\n"
-        "            containing more sensitive overlaps\n"
         "        -t, --threads <int>\n"
         "            default: 1\n"
         "            number of threads\n"

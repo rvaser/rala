@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <random>
 
 #include "sequence.hpp"
 #include "overlap.hpp"
@@ -1020,8 +1021,9 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         thread_futures.clear();
     }
 
-    for (auto& it: sensitive_overlaps) {
+    for (auto& it: overlaps) {
         if (it->trim(piles_) == false) {
+            it.reset();
             continue;
         }
         switch (it->type(piles_)) {
@@ -1032,15 +1034,13 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
                 }
                 break;
             default:
+                it.reset();
                 break;
         }
     }
+    shrinkToFit(overlaps, 0);
 
     for (auto& it: overlaps) {
-        if (it->trim(piles_) == false) {
-            it.reset();
-            continue;
-        }
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
             !piles_[it->b_id()]->is_valid_overlap(it->b_begin(), it->b_end())) {
             it.reset();
@@ -1140,7 +1140,7 @@ void Graph::postprocess() {
                     if (distance < 0.01) {
                         distance = 0.01;
                     }
-                    displacement = add(displacement, multiply(delta, (k) / (distance * distance)));
+                    displacement = add(displacement, multiply(delta, (k * k) / (distance * distance)));
                 }
                for (const auto& e: nodes_[n]->prefix_edges_) {
                     auto m = (e->begin_node_->id_ >> 1) << 1;
@@ -1215,30 +1215,34 @@ void Graph::postprocess() {
         }
 
         /*
-        std::ofstream g("g" + std::to_string(c) + ".csv");
-        std::ofstream p("p" + std::to_string(c) + ".csv");
+        std::ofstream es("e" + std::to_string(c) + ".csv");
+        std::ofstream ps("p" + std::to_string(c) + ".csv");
+        std::ofstream ts("t" + std::to_string(c) + ".csv");
         ++c;
 
         for (const auto& it: component) {
-            p << it << "," << points[it].first << "," << points[it].second << std::endl;
+            ps << it << "," << points[it].first << "," << points[it].second << std::endl;
             for (const auto& e: nodes_[it]->prefix_edges_) {
                 auto o = (e->begin_node_->id_ >> 1) << 1;
-                g << it << "," << o << std::endl;
+                es << it << "," << o << std::endl;
             }
             for (const auto& e: nodes_[it]->suffix_edges_) {
                 auto o = (e->end_node_->id_ >> 1) << 1;
-                g << it << "," << o << std::endl;
-            }
-            for (const auto& e: transitive_edges_) {
-                if (component.find(e.first) != component.end() &&
-                    component.find(e.second) != component.end()) {
-                    g << e.first << "," << e.second << std::endl;
-                }
+                es << it << "," << o << std::endl;
             }
         }
 
-        p.close();
-        g.close();
+        for (const auto& e: transitive_edges_) {
+            if (e.first < e.second &&
+                component.find(e.first) != component.end() &&
+                component.find(e.second) != component.end()) {
+                ts << e.first << "," << e.second << std::endl;
+            }
+        }
+
+        ts.close();
+        ps.close();
+        es.close();
         */
     }
 
