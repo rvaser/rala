@@ -33,7 +33,7 @@ class Plotter:
             eprint("[rala::Plotter::plot_pile] error: incomplete pile!")
             sys.exit(1);
 
-        scpg = seaborn.cubehelix_palette(rot=-.4)
+        scpb = seaborn.color_palette("Blues")
         scpr = seaborn.color_palette("Reds")
 
         x = range(len(pile["y"]))
@@ -41,13 +41,13 @@ class Plotter:
         seaborn.despine()
 
         if (orientation == 0):
-            ax.plot(x, pile["y"], label="y", color=scpg[2])
+            ax.plot(x, pile["y"], label="y", color=scpb[2])
             for slope in pile["h"]:
                 ax.axvline(slope, color=scpr[2], linestyle=":")
             begin = pile["b"]
             end = pile["e"]
         else:
-            ax.plot(x, list(reversed(pile["y"])), label="y", color=scpg[2])
+            ax.plot(x, list(reversed(pile["y"])), label="y", color=scpb[2])
             for slope in pile["h"]:
                 ax.axvline(len(x) - slope, color=scpr[2], linestyle=":")
             begin = len(x) - pile["e"]
@@ -58,8 +58,8 @@ class Plotter:
         else:
             ax.axvline(end - overlap_length, label="o", color="k", linestyle="--")
 
-        ax.axhline(int(pile["m"]), label="m", color=scpg[1], linestyle=":")
-        ax.axhline(int(pile["p10"]), label="p10", color=scpg[0], linestyle=":")
+        ax.axhline(int(pile["m"]), label="m", color=scpb[1], linestyle=":")
+        ax.axhline(int(pile["p10"]), label="p10", color=scpb[0], linestyle=":")
         ax.set_title(title)
 
     def run(self):
@@ -89,7 +89,7 @@ class Plotter:
                 figure.text(0.5, 0.04, "base", ha="center")
                 figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
                 matplotlib.pyplot.legend(loc="best")
-                matplotlib.pyplot.savefig(self.out_path + str(pile) + ".png")
+                matplotlib.pyplot.savefig(self.out_path + str(pile) + ".svg", format='svg', dpi=1200)
                 matplotlib.pyplot.close(figure)
 
             return
@@ -138,7 +138,7 @@ class Plotter:
             figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
             matplotlib.pyplot.legend(loc="best")
             matplotlib.pyplot.savefig(self.out_path +\
-                str(data["nodes"][node]['n']) + ".png")
+                str(data["nodes"][node]['n']) + ".svg", format='svg', dpi=1200)
             matplotlib.pyplot.close(figure)
 
 #*******************************************************************************
