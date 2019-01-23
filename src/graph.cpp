@@ -1021,9 +1021,8 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         thread_futures.clear();
     }
 
-    for (auto& it: overlaps) {
+    for (auto& it: sensitive_overlaps) {
         if (it->trim(piles_) == false) {
-            it.reset();
             continue;
         }
         switch (it->type(piles_)) {
@@ -1038,7 +1037,6 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
                 break;
         }
     }
-    shrinkToFit(overlaps, 0);
 
     for (auto& it: overlaps) {
         if (!piles_[it->a_id()]->is_valid_overlap(it->a_begin(), it->a_end()) ||
@@ -1093,7 +1091,7 @@ void Graph::postprocess() {
     );
 
     std::mt19937 generator(std::random_device{}());
-    std::uniform_real_distribution<> distribution(0.0, 1.0);
+    std::uniform_real_distribution<> distribution(0., 1.);
 
     using point = std::pair<double, double>;
 
@@ -1102,8 +1100,8 @@ void Graph::postprocess() {
 
         if (component.size() < 6) continue;
 
-        uint32_t num_iterations = 1000;
-        double k = sqrt(1.0 / static_cast<double>(component.size()));
+        uint32_t num_iterations = 100;
+        double k = sqrt(1. / static_cast<double>(component.size()));
         double t = 0.1;
         double dt = t / static_cast<double>(num_iterations + 1);
 
@@ -1132,7 +1130,7 @@ void Graph::postprocess() {
             std::vector<point> displacements(nodes_.size());
 
             auto thread_task = [&](uint64_t n) -> void {
-                point displacement = {0, 0};
+                point displacement = {0., 0.};
                 for (const auto& m: component) {
                     if (n == m) continue;
                     auto delta = substract(points[n], points[m]);
@@ -1149,7 +1147,7 @@ void Graph::postprocess() {
                     if (distance < 0.01) {
                         distance = 0.01;
                     }
-                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                    displacement = add(displacement, multiply(delta, -1. * distance / k));
                 }
                 for (const auto& e: nodes_[n]->suffix_edges_) {
                     auto m = (e->end_node_->id_ >> 1) << 1;
@@ -1158,7 +1156,7 @@ void Graph::postprocess() {
                     if (distance < 0.01) {
                         distance = 0.01;
                     }
-                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                    displacement = add(displacement, multiply(delta, -1. * distance / k));
                 }
                 bool found = false;
                 for (const auto& e: transitive_edges_) {
@@ -1175,7 +1173,7 @@ void Graph::postprocess() {
                     if (distance < 0.01) {
                         distance = 0.01;
                     }
-                    displacement = add(displacement, multiply(delta, -1.0 * distance / k));
+                    displacement = add(displacement, multiply(delta, -1. * distance / k));
                 }
 
                 auto length = norm(displacement);
@@ -1221,7 +1219,8 @@ void Graph::postprocess() {
         ++c;
 
         for (const auto& it: component) {
-            ps << it << "," << points[it].first << "," << points[it].second << std::endl;
+            ps << it << "," << points[it].first << "," << points[it].second <<
+                "," << (nodes_[it]->is_junction() ? 1 : 0) << std::endl;
             for (const auto& e: nodes_[it]->prefix_edges_) {
                 auto o = (e->begin_node_->id_ >> 1) << 1;
                 es << it << "," << o << std::endl;
