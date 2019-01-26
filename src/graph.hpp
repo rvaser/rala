@@ -56,8 +56,7 @@ public:
     uint32_t remove_transitive_edges();
 
     /*!
-     * @brief Removes long edges (i.e. small overlaps, possible information
-     * loss and graph fragmentation) (Li 2016)
+     * @brief Removes long edges depending on the graph drawing
      */
     uint32_t remove_long_edges();
 
@@ -75,6 +74,11 @@ public:
      * @brief Creates unitigs by merging chains of overlapping sequences
      */
     uint32_t create_unitigs();
+
+    /*!
+     * @brief Creates unitigs which are at least epsilon away from junction nodes
+     */
+    uint32_t shrink(uint32_t epsilon);
 
     /*!
      * @brief Stores all contigs into dst

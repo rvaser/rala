@@ -25,7 +25,7 @@ for i, r in t.iterrows():
     matplotlib.pyplot.plot([d[r[0]][0], d[r[1]][0]], [d[r[0]][1], d[r[1]][1]], ':', c=scpg[1])
 
 for i, r in p.iterrows():
-    matplotlib.pyplot.plot(r[1], r[2], '.', c=scpg[4])
+    matplotlib.pyplot.plot(r[1], r[2], '.', c=scpg[4], markersize=(5 if r[4] == 1 else 25))
 
 matplotlib.pyplot.xticks([])
 matplotlib.pyplot.yticks([])
