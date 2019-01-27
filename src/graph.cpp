@@ -660,8 +660,12 @@ void Graph::simplify() {
     }
 
     shrink(42);
-    postprocess();
-    uint32_t num_long_edges = remove_long_edges();
+    uint32_t num_long_edges = 0;
+    for (uint32_t i = 0; i < 5; ++i) {
+        postprocess();
+        num_long_edges += remove_long_edges();
+        num_tips += remove_tips();
+    }
 
     while (true) {
         uint32_t num_changes = remove_tips();
@@ -1106,7 +1110,7 @@ void Graph::postprocess() {
         }
     );
 
-    std::mt19937 generator(666);
+    std::mt19937 generator(std::random_device{}());
     std::uniform_real_distribution<> distribution(0., 1.);
 
     using point = std::pair<double, double>;
