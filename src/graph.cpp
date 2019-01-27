@@ -1053,6 +1053,21 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 
 void Graph::postprocess() {
 
+    if (transitive_edges_.empty() == false) {
+        std::vector<std::pair<uint64_t, uint64_t>> tmp = { transitive_edges_[0] };
+        for (uint64_t i = 1; i < transitive_edges_.size(); ++i) {
+            if (nodes_[transitive_edges_[i].first] == nullptr ||
+                nodes_[transitive_edges_[i].second] == nullptr) {
+                continue;
+            }
+            if (transitive_edges_[i].first != transitive_edges_[i].second &&
+                transitive_edges_[i] != transitive_edges_[i - 1]) {
+                tmp.emplace_back(transitive_edges_[i]);
+            }
+        }
+        tmp.swap(transitive_edges_);
+    }
+
     std::vector<std::unordered_set<uint64_t>> components;
     std::vector<bool> is_visited(piles_.size(), false);
     for (uint64_t i = 0; i < nodes_.size(); ++i) {
@@ -1091,7 +1106,7 @@ void Graph::postprocess() {
         }
     );
 
-    std::mt19937 generator(std::random_device{}());
+    std::mt19937 generator(666);
     std::uniform_real_distribution<> distribution(0., 1.);
 
     using point = std::pair<double, double>;
@@ -1134,8 +1149,7 @@ void Graph::postprocess() {
             points[it].second = distribution(generator);
         }
 
-        uint32_t i = 0;
-        while (i < num_iterations) {
+        for (uint32_t i = 0; i < num_iterations; ++i) {
             std::vector<std::future<void>> thread_futures;
             std::vector<point> displacements(nodes_.size());
 
@@ -1150,7 +1164,7 @@ void Graph::postprocess() {
                     }
                     displacement = add(displacement, multiply(delta, (k * k) / (distance * distance)));
                 }
-               for (const auto& e: nodes_[n]->prefix_edges_) {
+                for (const auto& e: nodes_[n]->prefix_edges_) {
                     auto m = (e->begin_node_->id_ >> 1) << 1;
                     auto delta = substract(points[n], points[m]);
                     auto distance = norm(delta);
@@ -1329,7 +1343,7 @@ uint32_t Graph::remove_long_edges() {
                     other_edge->is_marked_) {
                     continue;
                 }
-                if (edge->weight_ * 2 < other_edge->weight_) {
+                if (edge->weight_ * 2.0 < other_edge->weight_) {
                     other_edge->is_marked_ = true;
                     other_edge->pair_->is_marked_ = true;
                     marked_edges_.emplace(other_edge->id_);
@@ -2015,21 +2029,6 @@ uint32_t Graph::shrink(uint32_t epsilon) {
         }
     }
     std::sort(transitive_edges_.begin(), transitive_edges_.end());
-
-    if (transitive_edges_.empty() == false) {
-        std::vector<std::pair<uint64_t, uint64_t>> tmp = { transitive_edges_[0] };
-        for (uint64_t i = 1; i < transitive_edges_.size(); ++i) {
-            if (nodes_[transitive_edges_[i].first] == nullptr ||
-                nodes_[transitive_edges_[i].second] == nullptr) {
-                continue;
-            }
-            if (transitive_edges_[i].first != transitive_edges_[i].second &&
-                transitive_edges_[i] != transitive_edges_[i - 1]) {
-                tmp.emplace_back(transitive_edges_[i]);
-            }
-        }
-        tmp.swap(transitive_edges_);
-    }
 
     return num_unitigs_created;
 }
