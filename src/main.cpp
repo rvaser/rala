@@ -6,7 +6,7 @@
 #include "graph.hpp"
 #include "thread_pool/thread_pool.hpp"
 
-static const char* version = "v0.7.0";
+static const char* version = "v1.0.0";
 
 static struct option options[] = {
     {"preconstruct", no_argument, 0, 'p'},
