@@ -40,6 +40,10 @@ public:
         return end_;
     }
 
+    uint16_t p10() const {
+        return p10_;
+    }
+
     uint16_t median() const {
         return median_;
     };
@@ -47,10 +51,14 @@ public:
     void find_median();
 
     const std::vector<uint16_t>& data() const {
-        if (corrected_data_.empty()) {
-            return data_;
-        }
-        return corrected_data_;
+        return data_;
+    }
+
+    /*!
+     * @brief Fills data_ with zeroes in interval [begin_, end_]
+     */
+    void clear() {
+        std::fill(data_.begin() + begin_, data_.begin() + end_, 0);
     }
 
     /*!
@@ -65,47 +73,69 @@ public:
     bool shrink(uint32_t begin, uint32_t end);
 
     /*!
-     * @brief Corrects data_ with other piles which have overlapping regions
-     */
-    void correct(const std::vector<std::shared_ptr<Overlap>>& overlaps,
-        const std::vector<std::unique_ptr<Pile>>& piles);
-
-    /*!
      * @brief Locates region in data_ with values greater or equal to predefined
      * coverage; updates begin_, end_ and data_ accordingly;
-     * if there is no such region (with valid coverage and longer than 1000),
+     * if there is no such region (with valid coverage and longer than 1260),
      * false is returned
      */
     bool find_valid_region();
 
     /*!
-     * @brief Locates chimeric regions in data_;
-     * if any such region is found, both begin_ and end_ are set to the longest
-     * continuous region of the sequence and data_ is updated accordingly;
-     * if the new area is shorter than 1000, false is returned
+     * @brief Locates chimeric pits (coverage drops) in data_
      */
-    bool find_chimeric_regions(uint16_t dataset_median);
+    void find_chimeric_pits();
+
+    bool has_chimeric_pit() const {
+        return !chimeric_pits_.empty();
+    }
+
+    /*!
+     * @brief Truncates data_ to longest region without chimeric pits
+     */
+    bool break_over_chimeric_pits(uint16_t dataset_median);
+
+    /*!
+     * @brief Locates possible chimeric hills in data_
+     */
+    void find_chimeric_hills();
+
+    bool has_chimeric_hill() const {
+        return !chimeric_hills_.empty();
+    }
+
+    /*!
+     * @brief Adds coverage to chimeric hills to decrease false positives
+     */
+    void check_chimeric_hills(const std::unique_ptr<Overlap>& overlap);
+
+    /*!
+     * @brief Truncates data_ to longest region without chimeric hills
+     */
+    bool break_over_chimeric_hills();
+
+    bool has_chimeric_region() const {
+        return has_chimeric_hill() || has_chimeric_pit();
+    }
 
     /*!
      * @brief Locates regions in data_ which ought to be repetitive in the
-     * genome and stores them in hills_
+     * genome and stores them in repeat_hills_
      */
-    void find_repetitive_regions(uint16_t dataset_median);
+    void find_repetitive_hills(uint16_t dataset_median);
+
+    bool has_repetitive_hills() const {
+        return !repeat_hills_.empty();
+    }
+
+    /*!
+     * @brief Adds coverage to repetitive hill (number of reads passing through)
+     */
+    void check_repetitive_hills(const std::unique_ptr<Overlap>& overlap);
 
     /*
      * @brief Manually add repetitive region in data_
      */
     void add_repetitive_region(uint32_t begin, uint32_t end);
-
-    /*
-     * @brief Manually add reverse repetitive region
-     */
-    void resolve_peculiar_regions();
-
-    /*
-     * @brief Chech for selfmeric reads
-     */
-    void add_peculiar_region(uint32_t begin, uint32_t end);
 
     /*!
      * @brief Checks whether overlap [begin, end> is valid with respect to
@@ -132,9 +162,11 @@ private:
     uint16_t p10_;
     uint16_t median_;
     std::vector<uint16_t> data_;
-    std::vector<uint16_t> corrected_data_;
-    std::vector<std::pair<uint32_t, uint32_t>> hills_;
-    std::vector<std::pair<uint32_t, uint32_t>> peculiars_;
+    std::vector<std::pair<uint32_t, uint32_t>> repeat_hills_;
+    std::vector<bool> repeat_hill_coverage_;
+    std::vector<std::pair<uint32_t, uint32_t>> chimeric_pits_;
+    std::vector<std::pair<uint32_t, uint32_t>> chimeric_hills_;
+    std::vector<uint32_t> chimeric_hill_coverage_;
 };
 
 }

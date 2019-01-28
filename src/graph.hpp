@@ -38,16 +38,16 @@ public:
     ~Graph();
 
     /*!
-     * @brief Constructs the assembly graph by removing contained sequences and
-     * transitive overlaps (removes chimeric and repetitive sequences before
-     * construction if flag is set)
+     * @brief Constructs the assembly graph by breaking chimeric sequences and
+     * removing contained sequences (if path is provided, overlaps between
+     * repetitive sequences are removed)
      */
-    void construct(bool preprocess = true);
+    void construct(const std::string& sensitive_overlaps_path);
 
     /*!
      * @brief Removes transitive edges and tips, pops bubbles
      */
-    void simplify(const std::string& debug_prefix);
+    void simplify();
 
     /*!
      * @brief Removes transitive edge (no information loss)
@@ -56,8 +56,7 @@ public:
     uint32_t remove_transitive_edges();
 
     /*!
-     * @brief Removes long edges (i.e. small overlaps, possible information
-     * loss and graph fragmentation) (Li 2016)
+     * @brief Removes long edges depending on the graph drawing
      */
     uint32_t remove_long_edges();
 
@@ -77,26 +76,38 @@ public:
     uint32_t create_unitigs();
 
     /*!
+     * @brief Creates unitigs which are at least epsilon away from junction nodes
+     */
+    uint32_t shrink(uint32_t epsilon);
+
+    /*!
      * @brief Stores all contigs into dst
      */
     void extract_contigs(std::vector<std::unique_ptr<Sequence>>& dst,
-        bool drop_unassembled_sequences = true) const;
+        bool drop_unassembled_sequences = true);
+
+    /*!
+     * @brief Stores all nodes into dst
+     */
+    void extract_nodes(std::vector<std::unique_ptr<Sequence>>& dst);
 
     /*!
      * @brief Prints assembly graph in csv format
      */
-    void print_csv(std::string path) const;
+    void print_csv(const std::string& path) const;
 
     /*!
      * @brief Prints assembly graph in GFA format
      */
-    void print_gfa(std::string path) const;
+    void print_gfa(const std::string& path) const;
 
     /*!
      * @brief Prints all unresolved graph junctions in JSON format (plottable
      * with misc/plotter.py)
      */
-    void print_json(std::string path) const;
+    void print_json(const std::string& path) const;
+
+    void print_debug(const std::string& prefix) const;
 
     friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);
@@ -113,10 +124,21 @@ private:
     void initialize();
 
     /*!
-     * @brief Splits chimeric sequences and removes overlaps between sequences
-     * that do not bridge repetitive genomic regions
+     * @brief Cleanses chimeric sequences
      */
-    void preprocess();
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        std::vector<std::unique_ptr<Overlap>>& internals);
+
+    /*!
+     * @brief Removes overlaps between repetitive sequences
+     */
+    void preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
+        const std::string& path);
+
+    /*!
+     * @brief Calculates the edge weights from a Fruchterman-Reingold layout
+     */
+    void postprocess();
 
     uint64_t find_edge(uint64_t src, uint64_t dst);
 
@@ -146,6 +168,7 @@ private:
     std::vector<std::unique_ptr<Node>> nodes_;
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_set<uint64_t> marked_edges_;
+    std::vector<std::pair<uint64_t, uint64_t>> transitive_edges_;
 };
 
 }

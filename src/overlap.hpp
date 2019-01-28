@@ -22,6 +22,7 @@ namespace bioparser {
 namespace rala {
 
 class Pile;
+class Graph;
 
 enum class OverlapType {
     kX, // bad overlap
@@ -78,12 +79,16 @@ public:
     bool transmute(const std::vector<std::unique_ptr<Pile>>& piles,
         const std::unordered_map<std::string, uint64_t>& name_to_id);
 
+    bool transmute_(const std::vector<std::unique_ptr<Pile>>& piles,
+        const std::unordered_map<std::string, uint64_t>& name_to_id);
+
     bool trim(const std::vector<std::unique_ptr<Pile>>& piles);
 
-    OverlapType type() const;
+    OverlapType type(const std::vector<std::unique_ptr<Pile>>& piles) const;
 
     friend bioparser::MhapParser<Overlap>;
     friend bioparser::PafParser<Overlap>;
+    friend Graph;
 private:
     Overlap(uint64_t a_id, uint64_t b_id, double error, uint32_t minmers,
         uint32_t a_rc, uint32_t a_begin, uint32_t a_end, uint32_t a_length,
