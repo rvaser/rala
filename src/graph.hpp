@@ -23,6 +23,10 @@ namespace thread_pool {
     class ThreadPool;
 }
 
+namespace logger {
+    class Logger;
+}
+
 namespace rala {
 
 class Sequence;
@@ -169,6 +173,8 @@ private:
     std::vector<std::unique_ptr<Edge>> edges_;
     std::unordered_set<uint64_t> marked_edges_;
     std::vector<std::pair<uint64_t, uint64_t>> transitive_edges_;
+
+    std::unique_ptr<logger::Logger> logger_;
 };
 
 }

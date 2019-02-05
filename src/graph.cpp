@@ -13,11 +13,11 @@
 #include "sequence.hpp"
 #include "overlap.hpp"
 #include "pile.hpp"
-#include "timer.hpp"
 #include "graph.hpp"
 
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
+#include "logger/logger.hpp"
 
 namespace rala {
 
@@ -233,16 +233,17 @@ Graph::Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
         : sparser_(std::move(sparser)), name_to_id_(), piles_(),
         coverage_median_(0), oparser_(std::move(oparser)), is_valid_overlap_(),
         thread_pool_(thread_pool::createThreadPool(num_threads)),
-        nodes_(), edges_(), marked_edges_(), transitive_edges_() {
+        nodes_(), edges_(), marked_edges_(), transitive_edges_(),
+        logger_(logger::createLogger()) {
 }
 
 Graph::~Graph() {
+    (*logger_).total("[rala::Graph::] total =");
 }
 
 void Graph::initialize() {
 
-    Timer timer;
-    timer.start();
+    (*logger_)();
 
     // create piles and sequence name hash
     uint64_t num_sequences = 0;
@@ -262,7 +263,8 @@ void Graph::initialize() {
         }
     }
 
-    fprintf(stderr, "[rala::Graph::initialize] loaded sequences\n");
+    (*logger_)("[rala::Graph::initialize] loaded sequences");
+    (*logger_)();
 
     // update piles
     std::vector<std::unique_ptr<Overlap>> overlaps;
@@ -379,7 +381,8 @@ void Graph::initialize() {
         }
     }
 
-    fprintf(stderr, "[rala::Graph::initialize] loaded overlaps\n");
+    (*logger_)("[rala::Graph::initialize] loaded overlaps");
+    (*logger_)();
 
     std::vector<std::future<void>> thread_futures;
     for (const auto& it: piles_) {
@@ -410,6 +413,8 @@ void Graph::initialize() {
         }
     }
 
+    (*logger_)("[rala::Graph::initialize] prefiltered sequences");
+
     if (num_prefiltered_sequences == num_sequences) {
         fprintf(stderr, "[rala::Graph::initialize] error: filtered all sequences!\n");
         exit(1);
@@ -417,9 +422,6 @@ void Graph::initialize() {
 
     fprintf(stderr, "[rala::Graph::initialize] number of prefiltered sequences = %lu\n",
         num_prefiltered_sequences);
-
-    timer.stop();
-    timer.print("[rala::Graph::initialize] elapsed time =");
 }
 
 void Graph::construct(const std::string& sensitive_overlaps_path) {
@@ -432,8 +434,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     initialize();
 
-    Timer timer;
-    timer.start();
+    (*logger_)();
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps, internals;
@@ -516,10 +517,12 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         }
     }
 
-    fprintf(stderr, "[rala::Graph::construct] loaded overlaps\n");
+    (*logger_)("[rala::Graph::construct] loaded overlaps");
 
     preprocess(overlaps, internals);
     preprocess(overlaps, sensitive_overlaps_path);
+
+    (*logger_)();
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -543,7 +546,8 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         }
     }
 
-    fprintf(stderr, "[rala::Graph::construct] loaded sequences\n");
+    (*logger_)("[rala::Graph::construct] loaded sequences");
+    (*logger_)();
 
     // create assembly graph
     std::vector<int64_t> sequence_id_to_node_id(sequences.size(), -1);
@@ -627,18 +631,17 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         it.reset();
     }
 
-    fprintf(stderr, "[rala::Graph::construct] number of nodes in graph = %zu\n",
+    (*logger_)("[rala::Graph::construct] created assembly graph");
+
+    fprintf(stderr, "[rala::Graph::construct] number of nodes = %zu\n",
         nodes_.size());
-    fprintf(stderr, "[rala::Graph::construct] number of edges in graph = %zu\n",
+    fprintf(stderr, "[rala::Graph::construct] number of edges = %zu\n",
         edges_.size());
-    timer.stop();
-    timer.print("[rala::Graph::construct] elapsed time =");
 }
 
 void Graph::simplify() {
 
-    Timer timer;
-    timer.start();
+    (*logger_)();
 
     uint32_t num_transitive_edges = remove_transitive_edges();
 
@@ -681,6 +684,8 @@ void Graph::simplify() {
         }
     }
 
+    (*logger_)("[rala::Graph::simplify]");
+
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
     fprintf(stderr, "[rala::Graph::simplify] number of tips = %u\n",
@@ -689,16 +694,12 @@ void Graph::simplify() {
         num_bubbles);
     fprintf(stderr, "[rala::Graph::simplify] number of long edges = %u\n",
         num_long_edges);
-
-    timer.stop();
-    timer.print("[rala::Graph::simplify] elapsed time =");
 }
 
 void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::unique_ptr<Overlap>>& internals) {
 
-    Timer timer;
-    timer.start();
+    (*logger_)();
 
     std::vector<std::future<void>> thread_futures;
     for (const auto& it: piles_) {
@@ -875,8 +876,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
     shrinkToFit(overlaps, 0);
 
-    timer.stop();
-    timer.print("[rala::Graph::preprocess] elapsed time =");
+    (*logger_)("[rala::Graph::preprocess]");
 }
 
 void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
@@ -886,8 +886,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         return;
     }
 
-    Timer timer;
-    timer.start();
+    (*logger_)();
 
     std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
 
@@ -1051,11 +1050,12 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
     shrinkToFit(overlaps, 0);
 
-    timer.stop();
-    timer.print("[rala::Graph::preprocess] elapsed time =");
+    (*logger_)("[rala::Graph::preprocess]");
 }
 
 void Graph::postprocess() {
+
+    (*logger_)();
 
     if (transitive_edges_.empty() == false) {
         std::vector<std::pair<uint64_t, uint64_t>> tmp = { transitive_edges_[0] };
@@ -1272,6 +1272,8 @@ void Graph::postprocess() {
         es.close();
         */
     }
+
+    (*logger_)("[rala::Graph::postprocess]");
 
     return;
 }
