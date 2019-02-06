@@ -25,7 +25,7 @@ endif()
 if (NOT TARGET thread_pool)
     add_subdirectory(vendor/thread_pool EXCLUDE_FROM_ALL)
 endif()
-if (NOT TARGET log)
+if (NOT TARGET logger)
     add_subdirectory(vendor/logger EXCLUDE_FROM_ALL)
 endif()
 
