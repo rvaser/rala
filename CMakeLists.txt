@@ -29,7 +29,7 @@ if (NOT TARGET logger)
     add_subdirectory(vendor/logger EXCLUDE_FROM_ALL)
 endif()
 
-target_link_libraries(rala bioparser thread_pool pthread logger)
+target_link_libraries(rala bioparser thread_pool logger)
 
 if (rala_build_tests)
 

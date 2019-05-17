@@ -234,23 +234,23 @@ Graph::Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
         coverage_median_(0), oparser_(std::move(oparser)), is_valid_overlap_(),
         thread_pool_(thread_pool::createThreadPool(num_threads)),
         nodes_(), edges_(), marked_edges_(), transitive_edges_(),
-        logger_(logger::createLogger()) {
+        logger_(new logger::Logger()) {
 }
 
 Graph::~Graph() {
-    (*logger_).total("[rala::Graph::] total =");
+    logger_->total("[rala::Graph::] total =");
 }
 
 void Graph::initialize() {
 
-    (*logger_)();
+    logger_->log();
 
     // create piles and sequence name hash
     uint64_t num_sequences = 0;
     sparser_->reset();
     while (true) {
         std::vector<std::unique_ptr<Sequence>> sequences;
-        auto status = sparser_->parse_objects(sequences, kChunkSize);
+        auto status = sparser_->parse(sequences, kChunkSize);
 
         for (uint64_t i = 0; i < sequences.size(); ++i, ++num_sequences) {
             name_to_id_[sequences[i]->name()] = num_sequences;
@@ -263,8 +263,8 @@ void Graph::initialize() {
         }
     }
 
-    (*logger_)("[rala::Graph::initialize] loaded sequences");
-    (*logger_)();
+    logger_->log("[rala::Graph::initialize] loaded sequences");
+    logger_->log();
 
     // update piles
     std::vector<std::unique_ptr<Overlap>> overlaps;
@@ -328,7 +328,7 @@ void Graph::initialize() {
     oparser_->reset();
     while (true) {
         uint64_t l = overlaps.size();
-        auto status = oparser_->parse_objects(overlaps, kChunkSize);
+        auto status = oparser_->parse(overlaps, kChunkSize);
 
         is_valid_overlap_.resize(is_valid_overlap_.size() + overlaps.size() - l, true);
 
@@ -366,7 +366,7 @@ void Graph::initialize() {
 
         std::vector<std::future<void>> thread_futures;
         for (const auto& it: piles_) {
-            thread_futures.emplace_back(thread_pool_->submit_task(
+            thread_futures.emplace_back(thread_pool_->submit(
                 [&](uint64_t i) -> void {
                     piles_[i]->add_layers(overlap_bounds[i]);
                     std::vector<uint32_t>().swap(overlap_bounds[i]);
@@ -381,8 +381,8 @@ void Graph::initialize() {
         }
     }
 
-    (*logger_)("[rala::Graph::initialize] loaded overlaps");
-    (*logger_)();
+    logger_->log("[rala::Graph::initialize] loaded overlaps");
+    logger_->log();
 
     std::vector<std::future<void>> thread_futures;
     for (const auto& it: piles_) {
@@ -390,7 +390,7 @@ void Graph::initialize() {
             continue;
         }
 
-        thread_futures.emplace_back(thread_pool_->submit_task(
+        thread_futures.emplace_back(thread_pool_->submit(
             [&](uint64_t i) -> void {
                 if (piles_[i]->find_valid_region() == false) {
                     piles_[i].reset();
@@ -413,7 +413,7 @@ void Graph::initialize() {
         }
     }
 
-    (*logger_)("[rala::Graph::initialize] prefiltered sequences");
+    logger_->log("[rala::Graph::initialize] prefiltered sequences");
 
     if (num_prefiltered_sequences == num_sequences) {
         fprintf(stderr, "[rala::Graph::initialize] error: filtered all sequences!\n");
@@ -434,7 +434,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     initialize();
 
-    (*logger_)();
+    logger_->log();
 
     // store overlaps
     std::vector<std::unique_ptr<Overlap>> overlaps, internals;
@@ -443,7 +443,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
     oparser_->reset();
     while (true) {
         uint64_t l = overlaps.size();
-        auto status = oparser_->parse_objects(overlaps, kChunkSize);
+        auto status = oparser_->parse(overlaps, kChunkSize);
 
         for (uint64_t i = l; i < overlaps.size(); ++i) {
             auto& it = overlaps[i];
@@ -517,12 +517,12 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         }
     }
 
-    (*logger_)("[rala::Graph::construct] loaded overlaps");
+    logger_->log("[rala::Graph::construct] loaded overlaps");
 
     preprocess(overlaps, internals);
     preprocess(overlaps, sensitive_overlaps_path);
 
-    (*logger_)();
+    logger_->log();
 
     // store reads
     std::vector<std::unique_ptr<Sequence>> sequences;
@@ -530,7 +530,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
     sparser_->reset();
     while (true) {
         uint64_t l = sequences.size();
-        auto status = sparser_->parse_objects(sequences, kChunkSize);
+        auto status = sparser_->parse(sequences, kChunkSize);
 
         for (uint64_t i = l; i < sequences.size(); ++i) {
             if (piles_[i] == nullptr) {
@@ -546,8 +546,8 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         }
     }
 
-    (*logger_)("[rala::Graph::construct] loaded sequences");
-    (*logger_)();
+    logger_->log("[rala::Graph::construct] loaded sequences");
+    logger_->log();
 
     // create assembly graph
     std::vector<int64_t> sequence_id_to_node_id(sequences.size(), -1);
@@ -631,7 +631,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
         it.reset();
     }
 
-    (*logger_)("[rala::Graph::construct] created assembly graph");
+    logger_->log("[rala::Graph::construct] created assembly graph");
 
     fprintf(stderr, "[rala::Graph::construct] number of nodes = %zu\n",
         nodes_.size());
@@ -641,7 +641,7 @@ void Graph::construct(const std::string& sensitive_overlaps_path) {
 
 void Graph::simplify() {
 
-    (*logger_)();
+    logger_->log();
 
     uint32_t num_transitive_edges = remove_transitive_edges();
 
@@ -684,7 +684,7 @@ void Graph::simplify() {
         }
     }
 
-    (*logger_)("[rala::Graph::simplify]");
+    logger_->log("[rala::Graph::simplify]");
 
     fprintf(stderr, "[rala::Graph::simplify] number of transitive edges = %u\n",
         num_transitive_edges);
@@ -699,14 +699,14 @@ void Graph::simplify() {
 void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::unique_ptr<Overlap>>& internals) {
 
-    (*logger_)();
+    logger_->log();
 
     std::vector<std::future<void>> thread_futures;
     for (const auto& it: piles_) {
         if (it == nullptr) {
             continue;
         }
-        thread_futures.emplace_back(thread_pool_->submit_task(
+        thread_futures.emplace_back(thread_pool_->submit(
             [&](uint64_t i) -> void {
                 if (piles_[i]->has_chimeric_hill() &&
                     piles_[i]->break_over_chimeric_hills() == false) {
@@ -783,7 +783,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
             uint16_t component_median = medians[medians.size() / 2];
 
             for (const auto& it: component) {
-                thread_futures.emplace_back(thread_pool_->submit_task(
+                thread_futures.emplace_back(thread_pool_->submit(
                     [&](uint64_t i) -> void {
                         if (piles_[i]->break_over_chimeric_pits(component_median) == false) {
                             piles_[i].reset();
@@ -876,7 +876,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
     shrinkToFit(overlaps, 0);
 
-    (*logger_)("[rala::Graph::preprocess]");
+    logger_->log("[rala::Graph::preprocess]");
 }
 
 void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
@@ -886,7 +886,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         return;
     }
 
-    (*logger_)();
+    logger_->log();
 
     std::unique_ptr<bioparser::Parser<Overlap>> oparser = nullptr;
 
@@ -916,7 +916,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     std::vector<std::future<void>> thread_futures;
     while (true) {
         uint64_t l = sensitive_overlaps.size();
-        auto status = oparser->parse_objects(sensitive_overlaps, kChunkSize);
+        auto status = oparser->parse(sensitive_overlaps, kChunkSize);
 
         for (uint64_t i = l; i < sensitive_overlaps.size(); ++i) {
             sensitive_overlaps[i]->transmute_(piles_, name_to_id_);
@@ -940,7 +940,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
 
         for (const auto& it: sequence_id_to_id) {
             if (!overlap_bounds[sequence_id_to_id[it.first]].empty()) {
-                thread_futures.emplace_back(thread_pool_->submit_task(
+                thread_futures.emplace_back(thread_pool_->submit(
                     [&](uint64_t i) -> void {
                         piles_[i]->add_layers(overlap_bounds[sequence_id_to_id[i]]);
                         std::vector<uint32_t>().swap(overlap_bounds[sequence_id_to_id[i]]);
@@ -958,7 +958,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
 
     for (const auto& it: sequence_id_to_id) {
-        thread_futures.emplace_back(thread_pool_->submit_task(
+        thread_futures.emplace_back(thread_pool_->submit(
             [&](uint64_t i) -> void {
                 piles_[i]->find_median();
             }, it.first));
@@ -1014,7 +1014,7 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
         uint16_t component_median = medians[medians.size() / 2];
 
         for (const auto& it: component) {
-            thread_futures.emplace_back(thread_pool_->submit_task(
+            thread_futures.emplace_back(thread_pool_->submit(
                 [&](uint64_t i) -> void {
                     piles_[i]->find_repetitive_hills(component_median);
                 }, it));
@@ -1050,12 +1050,12 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps,
     }
     shrinkToFit(overlaps, 0);
 
-    (*logger_)("[rala::Graph::preprocess]");
+    logger_->log("[rala::Graph::preprocess]");
 }
 
 void Graph::postprocess() {
 
-    (*logger_)();
+    logger_->log();
 
     if (transitive_edges_.empty() == false) {
         std::vector<std::pair<uint64_t, uint64_t>> tmp = { transitive_edges_[0] };
@@ -1212,7 +1212,7 @@ void Graph::postprocess() {
             };
 
             for (const auto& n: component) {
-                thread_futures.emplace_back(thread_pool_->submit_task(thread_task, n));
+                thread_futures.emplace_back(thread_pool_->submit(thread_task, n));
             }
             for (const auto& it: thread_futures) {
                 it.wait();
@@ -1273,7 +1273,7 @@ void Graph::postprocess() {
         */
     }
 
-    (*logger_)("[rala::Graph::postprocess]");
+    logger_->log("[rala::Graph::postprocess]");
 
     return;
 }
