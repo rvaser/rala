@@ -670,6 +670,13 @@ void Graph::selfconstruct() {
 
     piles_.resize(Sequence::num_objects);
 
+    std::sort(sequences.begin(), sequences.end(),
+        [] (const std::unique_ptr<Sequence>& lhs,
+            const std::unique_ptr<Sequence>& rhs) -> bool {
+            return lhs->id() < rhs->id();
+        }
+    );
+
     Sequence::num_objects = 0;
     sparser_->reset();
     f = 0.00001;
@@ -680,7 +687,7 @@ void Graph::selfconstruct() {
             [&minimizers, &sequences, k, w] (std::uint64_t i) -> void {
                 ram::createMinimizers(minimizers[i],
                     sequences[i]->data().c_str(), sequences[i]->data().size(),
-                    i, k, w);
+                    sequences[i]->id(), k, w);
             }
         , i));
     }
@@ -739,18 +746,14 @@ void Graph::selfconstruct() {
                 it->data().c_str(), it->data().size(),
                 it->id(), k, w);
 
-            std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
-
-            continue;
+            ram::sortMinimizers(sequence_minimizers, k);
+            //std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
 
             auto matches = ram::map(sequence_minimizers, hash, index,
-                it->id(), 0, max_occurence);
+                it->id(), 0, max_occurence, true, false);
 
-            continue;
-
-            std::sort(matches.begin(), matches.end());
-
-            continue;
+            ram::sortMinimizers(matches, 32);
+            //std::sort(matches.begin(), matches.end());
 
             auto op_less = std::less<std::uint64_t>();
             auto op_greater = std::greater<std::uint64_t>();
@@ -782,7 +785,9 @@ void Graph::selfconstruct() {
                     }
 
                     if (indices.size() < 4 ||
-                        (matches[j + indices.back()].second >> 32) - (matches[j + indices.front()].second >> 32) < 100) {
+                        (matches[j + indices.back()].second >> 32) - (matches[j + indices.front()].second >> 32) < 100 ||
+                        abs((matches[j + indices.back()].second << 32 >> 32) - (matches[j + indices.front()].second << 32 >> 32) < 100)) {
+                        j = i;
                         continue;
                     }
 
@@ -800,9 +805,9 @@ void Graph::selfconstruct() {
                         piles_[target_id] = createPile(target_id, sequence_lengths[target_id]);
                     }*/
 
-                    /*overlaps.emplace_back(new Overlap(it->id(), target_id, 0, 0,
+                    overlaps.emplace_back(new Overlap(it->id(), target_id, 0, 0,
                         !strand, query_begin, query_end, it->data().size(),
-                        0, target_begin, target_end, sequence_lengths[target_id]));*/
+                        0, target_begin, target_end, sequence_lengths[target_id]));
 
                     j = i;
                 }
