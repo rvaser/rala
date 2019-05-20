@@ -15,6 +15,7 @@
 #include "pile.hpp"
 #include "graph.hpp"
 
+#include "ram/src/minimizers.hpp"
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "logger/logger.hpp"
@@ -210,17 +211,19 @@ std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         exit(1);
     }
 
-    if (is_suffix(overlaps_path, ".mhap") || is_suffix(overlaps_path, ".mhap.gz")) {
-        oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(
-            overlaps_path);
-    } else if (is_suffix(overlaps_path, ".paf") || is_suffix(overlaps_path, ".paf.gz")) {
-        oparser = bioparser::createParser<bioparser::PafParser, Overlap>(
-            overlaps_path);
-    } else {
-        fprintf(stderr, "[rala::createGraph] error: "
-            "file %s has unsupported format extension (valid extensions: "
-            ".mhap, .mhap.gz, .paf, .paf.gz)!\n", overlaps_path.c_str());
-        exit(1);
+    if (!overlaps_path.empty()) {
+        if (is_suffix(overlaps_path, ".mhap") || is_suffix(overlaps_path, ".mhap.gz")) {
+            oparser = bioparser::createParser<bioparser::MhapParser, Overlap>(
+                overlaps_path);
+        } else if (is_suffix(overlaps_path, ".paf") || is_suffix(overlaps_path, ".paf.gz")) {
+            oparser = bioparser::createParser<bioparser::PafParser, Overlap>(
+                overlaps_path);
+        } else {
+            fprintf(stderr, "[rala::createGraph] error: "
+                "file %s has unsupported format extension (valid extensions: "
+                ".mhap, .mhap.gz, .paf, .paf.gz)!\n", overlaps_path.c_str());
+            exit(1);
+        }
     }
 
     return std::unique_ptr<Graph>(new Graph(std::move(sparser), std::move(oparser),
@@ -424,11 +427,409 @@ void Graph::initialize() {
         num_prefiltered_sequences);
 }
 
+void Graph::selfconstruct() {
+
+    std::uint32_t e = 1000;
+    std::uint32_t k = 15;
+    std::uint32_t w = 5;
+    double f = 0.0001;
+
+    std::vector<std::unique_ptr<Sequence>> sequences;
+    std::vector<std::vector<ram::uint128_t>> minimizers;
+    std::vector<std::vector<ram::uint128_t>> hash;
+    std::vector<std::unordered_map<std::uint64_t, ram::uint128_t>> index;
+    std::vector<std::uint32_t> counts;
+    std::vector<std::future<void>> thread_futures;
+
+    while (true) {
+        logger_->log();
+
+        std::uint64_t l = sequences.size();
+        std::uint64_t ll = Sequence::num_objects;
+        bool status = sparser_->parse(sequences, kChunkSize);
+
+        std::sort(sequences.begin() + l, sequences.end(),
+            [] (const std::unique_ptr<Sequence>& lhs,
+                const std::unique_ptr<Sequence>& rhs) -> bool {
+                return lhs->data().size() > rhs->data().size();
+            }
+        );
+
+        logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
+        logger_->log();
+
+        minimizers.resize(sequences.size() - l);
+        for (std::uint64_t i = l; i < sequences.size(); ++i) {
+            if (sequences[i]->data().size() < 10000) {
+                break;
+            }
+            thread_futures.emplace_back(thread_pool_->submit(
+                [&minimizers, &sequences, l, k, w] (std::uint64_t i) -> void {
+                    ram::createMinimizers(minimizers[i - l],
+                        sequences[i]->data().c_str(), sequences[i]->data().size(),
+                        i, k, w);
+                }
+            , i));
+        }
+        std::uint64_t num_minimizers = 0;
+        for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
+            thread_futures[i].wait();
+            num_minimizers += minimizers[i].size();
+        }
+        thread_futures.clear();
+
+        std::cerr << "[rala::Graph::selfconstruct] num minimizers = "
+                  << num_minimizers << std::endl;
+        logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
+        logger_->log();
+
+        ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
+
+        logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
+        logger_->log();
+
+        counts.clear();
+        for (std::uint32_t i = 0; i < index.size(); ++i) {
+            for (const auto& it: index[i]) {
+                counts.emplace_back(it.second.second);
+            }
+        }
+
+        std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
+            counts.end());
+        std::uint32_t max_occurence = counts[(1 - f) * counts.size()];
+
+        std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
+                  << max_occurence << std::endl;
+        logger_->log("[rala::Graph::selfconstruct] found occurences in");
+        logger_->log();
+
+        std::vector<std::uint32_t> sequence_lengths;
+        for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+            sequence_lengths.emplace_back(sequences[i]->data().size());
+        }
+
+        std::vector<std::uint32_t> id_map;
+        for (std::uint32_t i = 0, j = l; i < l; ++i) {
+            while (j < sequences.size() && sequences[i]->data().size() < sequences[j]->data().size()) {
+                ++j;
+            }
+            id_map.emplace_back(j);
+        }
+
+        for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+            thread_futures.emplace_back(thread_pool_->submit(
+                [&sequences, &sequence_lengths, &hash, &index, &id_map, l, e, k, w, max_occurence] (std::uint32_t i) -> void {
+                    std::vector<ram::uint128_t> sequence_minimizers;
+                    if (sequences[i]->data().size() <= 2 * e) {
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str(), sequences[i]->data().size(),
+                            i < l ? id_map[i] : i, k, w);
+                    } else {
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str(), e,
+                            i < l ? id_map[i] : i, k, w);
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str() + sequences[i]->data().size() - e, e,
+                            (i < l ? id_map[i] : i) + 1, k, w);
+                    }
+
+                    std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
+
+                    bool ic = ram::is_contained(sequence_minimizers, hash, index,
+                        i < l ? id_map[i] : i, sequences[i]->data().size() - e,
+                        max_occurence, sequences[i]->data().size(),
+                        sequence_lengths);
+
+                    if (ic) {
+                        sequences[i].reset();
+                    }
+                }, i));
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
+
+        shrinkToFit(sequences, 0);
+
+        logger_->log("[rala::Graph::selfconstruct] mapped in");
+        logger_->log();
+
+        // map new to old
+        for (l = 0; l < sequences.size() && sequences[l]->id() < ll; ++l);
+        if (l == 0) {
+            if (!status) {
+                break;
+            }
+            continue;
+        }
+
+        minimizers.resize(l);
+        for (std::uint32_t i = 0; i < l; ++i) {
+            if (sequences[i]->data().size() < 10000) {
+                break;
+            }
+            thread_futures.emplace_back(thread_pool_->submit(
+                [&minimizers, &sequences, k, w] (std::uint32_t i) -> void {
+                    ram::createMinimizers(minimizers[i],
+                        sequences[i]->data().c_str(), sequences[i]->data().size(),
+                        i, k, w);
+                }
+            , i));
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
+
+        logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
+        logger_->log();
+
+        ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
+
+        logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
+        logger_->log();
+
+        counts.clear();
+        for (std::uint32_t i = 0; i < index.size(); ++i) {
+            for (const auto& it: index[i]) {
+                counts.emplace_back(it.second.second);
+            }
+        }
+
+        std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
+            counts.end());
+        max_occurence = counts[(1 - f) * counts.size()];
+
+        std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
+                  << max_occurence << std::endl;
+        logger_->log("[rala::Graph::selfconstruct] found occurences in");
+        logger_->log();
+
+        sequence_lengths.clear();
+        for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+            sequence_lengths.emplace_back(sequences[i]->data().size());
+        }
+
+        id_map.clear();
+        for (std::uint32_t i = l, j = 0; i < sequences.size(); ++i) {
+            while (j < l && sequences[i]->data().size() < sequences[j]->data().size()) {
+                ++j;
+            }
+            id_map.emplace_back(j);
+        }
+
+        for (std::uint32_t i = l; i < sequences.size(); ++i) {
+            thread_futures.emplace_back(thread_pool_->submit(
+                [&sequences, &sequence_lengths, &hash, &index, &id_map, l, e, k, w, max_occurence] (std::uint32_t i) -> void {
+                    std::vector<ram::uint128_t> sequence_minimizers;
+                    if (sequences[i]->data().size() <= 2 * e) {
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str(), sequences[i]->data().size(),
+                            id_map[i - l], k, w);
+                    } else {
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str(), e,
+                            id_map[i - l], k, w);
+                        ram::createMinimizers(sequence_minimizers,
+                            sequences[i]->data().c_str() + sequences[i]->data().size() - e, e,
+                            id_map[i - l] + 1, k, w);
+                    }
+
+                    std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
+
+                    bool ic = ram::is_contained(sequence_minimizers, hash, index,
+                        id_map[i - l], sequences[i]->data().size() - e, max_occurence,
+                        sequences[i]->data().size(), sequence_lengths);
+
+                    if (ic) {
+                        sequences[i].reset();
+                    }
+                }
+            , i));
+        }
+        for (const auto& it: thread_futures) {
+            it.wait();
+        }
+        thread_futures.clear();
+
+        shrinkToFit(sequences, 0);
+
+        logger_->log("[rala::Graph::selfconstruct] mapped in");
+
+        if (!status) {
+            break;
+        }
+    }
+
+    std::cerr << "[rala::Graph::selfconstruct] num uncontained reads = "
+              << sequences.size() << std::endl;
+
+    logger_->log();
+
+    piles_.resize(Sequence::num_objects);
+
+    Sequence::num_objects = 0;
+    sparser_->reset();
+    f = 0.00001;
+
+    minimizers.resize(sequences.size());
+    for (std::uint64_t i = 0; i < sequences.size(); ++i) {
+        thread_futures.emplace_back(thread_pool_->submit(
+            [&minimizers, &sequences, k, w] (std::uint64_t i) -> void {
+                ram::createMinimizers(minimizers[i],
+                    sequences[i]->data().c_str(), sequences[i]->data().size(),
+                    i, k, w);
+            }
+        , i));
+    }
+    std::uint64_t num_minimizers = 0;
+    for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
+        thread_futures[i].wait();
+        num_minimizers += minimizers[i].size();
+    }
+    thread_futures.clear();
+
+    std::cerr << "[rala::Graph::selfconstruct] num minimizers = "
+              << num_minimizers << std::endl;
+
+    logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
+    logger_->log();
+
+    ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
+
+    logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
+    logger_->log();
+
+    counts.clear();
+    for (std::uint32_t i = 0; i < index.size(); ++i) {
+        for (const auto& it: index[i]) {
+            counts.emplace_back(it.second.second);
+        }
+    }
+
+    std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
+        counts.end());
+    std::uint32_t max_occurence = counts[(1 - f) * counts.size()];
+
+    std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
+              << max_occurence << std::endl;
+    logger_->log("[rala::Graph::selfconstruct] found occurences in");
+    logger_->log();
+
+    std::vector<std::unique_ptr<Overlap>> overlaps;
+    std::vector<std::uint32_t> sequence_lengths(piles_.size());
+    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+        sequence_lengths[sequences[i]->id()] = sequences[i]->data().size();
+    }
+
+    while (true) {
+        logger_->log();
+
+        std::vector<std::unique_ptr<Sequence>> tmp;
+        bool status = sparser_->parse(tmp, kChunkSize);
+
+        logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
+        logger_->log();
+
+        for (const auto& it: tmp) {
+            std::vector<ram::uint128_t> sequence_minimizers;
+            ram::createMinimizers(sequence_minimizers,
+                it->data().c_str(), it->data().size(),
+                it->id(), k, w);
+
+            std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
+
+            continue;
+
+            auto matches = ram::map(sequence_minimizers, hash, index,
+                it->id(), 0, max_occurence);
+
+            continue;
+
+            std::sort(matches.begin(), matches.end());
+
+            continue;
+
+            auto op_less = std::less<std::uint64_t>();
+            auto op_greater = std::greater<std::uint64_t>();
+
+            matches.emplace_back(-1, -1); // stop dummy
+            for (std::uint32_t i = 1, j = 0; i < matches.size(); ++i) {
+                if ((matches[i].first >> 32) != (matches[i - 1].first >> 32) ||
+                    (matches[i].first << 32 >> 32) - (matches[i - 1].first << 32 >> 32) > 500) {
+
+                    if (i - j < 4) {
+                        j = i;
+                        continue;
+                    }
+
+                    std::sort(matches.begin() + j, matches.begin() + i,
+                        [] (const ram::uint128_t& lhs, const ram::uint128_t& rhs) {
+                            return lhs.second < rhs.second;
+                        }
+                    );
+
+                    std::vector<std::uint32_t> indices;
+                    bool strand = (matches[i - 1].first >> 32) & 1;
+                    if (strand) {
+                        indices = ram::longestSubsequence(matches.begin() + j,
+                            matches.begin() + i, op_less);
+                    } else {
+                        indices = ram::longestSubsequence(matches.begin() + j,
+                            matches.begin() + i, op_greater);
+                    }
+
+                    if (indices.size() < 4 ||
+                        (matches[j + indices.back()].second >> 32) - (matches[j + indices.front()].second >> 32) < 100) {
+                        continue;
+                    }
+
+                    std::uint64_t target_id = matches[i - 1].first >> 33;
+                    std::uint32_t target_begin = matches[j + indices.front()].second >> 32;
+                    std::uint32_t target_end = k + (matches[j + indices.back()].second >> 32);
+                    std::uint32_t query_begin = strand ?
+                        matches[j + indices.front()].second << 32 >> 32 :
+                        matches[j + indices.back()].second << 32 >> 32;
+                    std::uint32_t query_end = k + (strand ?
+                        matches[j + indices.back()].second << 32 >> 32 :
+                        matches[j + indices.front()].second << 32 >> 32);
+
+                    /*if (piles_[target_id] == nullptr) {
+                        piles_[target_id] = createPile(target_id, sequence_lengths[target_id]);
+                    }*/
+
+                    /*overlaps.emplace_back(new Overlap(it->id(), target_id, 0, 0,
+                        !strand, query_begin, query_end, it->data().size(),
+                        0, target_begin, target_end, sequence_lengths[target_id]));*/
+
+                    j = i;
+                }
+            }
+        }
+
+        logger_->log("[rala::Graph::selfconstruct] mapped in");
+
+        if (!status) {
+            break;
+        }
+    }
+
+    std::cerr << "[rala::Graph::selfconstruct] num overlaps = "
+              << overlaps.size() << std::endl;
+}
+
 void Graph::construct(const std::string& sensitive_overlaps_path) {
 
     if (!piles_.empty()) {
         fprintf(stderr, "[rala::Graph::construct] warning: "
             "object already constructed!\n");
+        return;
+    }
+
+    if (oparser_ == nullptr) {
+        selfconstruct();
         return;
     }
 

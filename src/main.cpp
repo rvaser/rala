@@ -64,13 +64,14 @@ int main(int argc, char** argv) {
         input_paths.emplace_back(argv[i]);
     }
 
-    if (input_paths.size() < 2) {
+    if (input_paths.size() < 1) {
         fprintf(stderr, "[rala::] error: missing input file(s)!\n");
         help();
         exit(1);
     }
 
-    auto graph = rala::createGraph(input_paths[0], input_paths[1], num_threads);
+    auto graph = rala::createGraph(input_paths[0], input_paths.size() > 1 ?
+        input_paths[1] : "", num_threads);
     graph->construct(sensitive_overlaps_path);
 
     if (preconstruct) {
@@ -98,7 +99,7 @@ int main(int argc, char** argv) {
 
 void help() {
     printf(
-        "usage: rala [options ...] <sequences> <overlaps>\n"
+        "usage: rala [options ...] <sequences> [<overlaps>]\n"
         "\n"
         "    <sequences>\n"
         "        input file in FASTA/FASTQ format (can be compressed with gzip)\n"

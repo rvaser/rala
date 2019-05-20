@@ -17,7 +17,10 @@ add_executable(rala
     src/main.cpp
     src/overlap.cpp
     src/pile.cpp
-    src/sequence.cpp)
+    src/sequence.cpp
+    vendor/ram/src/minimizers.cpp)
+
+include_directories(${PROJECT_SOURCE_DIR}/vendor)
 
 if (NOT TARGET bioparser)
     add_subdirectory(vendor/bioparser EXCLUDE_FROM_ALL)

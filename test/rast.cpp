@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
         }
 
         std::vector<std::unique_ptr<rala::Sequence>> reference;
-        rparser->parse_objects(reference, -1);
+        rparser->parse(reference, -1);
 
         reference_length = 0;
         for (const auto& it: reference) {
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[rast::] processing assembly %s\n", base_name.c_str());
 
         std::vector<std::unique_ptr<rala::Sequence>> assembly;
-        aparser->parse_objects(assembly, -1);
+        aparser->parse(assembly, -1);
 
         uint32_t assembly_length = 0;
         for (const auto& it: assembly) {

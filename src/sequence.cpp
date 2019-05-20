@@ -26,9 +26,12 @@ std::unique_ptr<Sequence> createSequence(const std::string& name,
         data.c_str(), data.size()));
 }
 
+std::uint64_t Sequence::num_objects = 0;
+
 Sequence::Sequence(const char* name, uint32_t name_length, const char* data,
     uint32_t data_length)
-        : name_(name, name_length), data_(data, data_length), reverse_complement_() {
+        : id_(num_objects++), name_(name, name_length), data_(data, data_length),
+        reverse_complement_() {
 }
 
 Sequence::Sequence(const char* name, uint32_t name_length, const char* data,

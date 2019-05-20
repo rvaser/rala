@@ -127,6 +127,8 @@ private:
      */
     void initialize();
 
+    void selfconstruct();
+
     /*!
      * @brief Cleanses chimeric sequences
      */
