@@ -115,6 +115,7 @@ public:
 
     friend std::unique_ptr<Graph> createGraph(const std::string& sequences_path,
         const std::string& overlaps_path, uint32_t num_threads);
+    std::string path_;
 private:
     Graph(std::unique_ptr<bioparser::Parser<Sequence>> sparser,
         std::unique_ptr<bioparser::Parser<Overlap>> oparser,

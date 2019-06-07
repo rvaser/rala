@@ -15,7 +15,7 @@
 #include "pile.hpp"
 #include "graph.hpp"
 
-#include "ram/src/minimizers.hpp"
+#include "ram/ram.hpp"
 #include "bioparser/bioparser.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "logger/logger.hpp"
@@ -434,130 +434,97 @@ void Graph::selfconstruct() {
     std::uint32_t w = 5;
     double f = 0.0001;
 
-    std::vector<std::unique_ptr<Sequence>> sequences;
-    std::vector<std::vector<ram::uint128_t>> minimizers;
-    std::vector<std::vector<ram::uint128_t>> hash;
-    std::vector<std::unordered_map<std::uint64_t, ram::uint128_t>> index;
-    std::vector<std::uint32_t> counts;
-    std::vector<std::future<void>> thread_futures;
+    ram::MinimizerEngine minimizer_engine(k, w, thread_pool_->num_threads());
+
+    std::vector<std::unique_ptr<ram::Sequence>> sequences;
+    auto sparser = bioparser::createParser<bioparser::FastaParser, ram::Sequence>(path_);
+
+    auto overlap_type = [&sequences] (uint32_t q_id, const ram::Overlap& o) -> uint8_t {
+        std::uint32_t q_length = sequences[q_id]->data.size();
+        std::uint32_t q_begin = o.q_begin;
+        std::uint32_t q_end = o.q_end;
+        std::uint32_t t_length = sequences[o.t_id]->data.size();
+        std::uint32_t t_begin = o.strand ? o.t_begin : t_length - o.t_end;
+        std::uint32_t t_end = o.strand ? o.t_end : t_length - o.t_begin;
+
+        std::uint32_t overhang = std::min(t_begin, q_begin) + std::min(
+            q_length - q_end, t_length - t_end);
+
+        if (t_end - t_begin < (t_end - t_begin + overhang) * 0.875 ||
+            q_end - q_begin < (q_end - q_begin + overhang) * 0.875) {
+            return 0; // internal
+        }
+        if (q_begin <= t_begin && (q_length - q_end) <= (t_length - t_end)) {
+            return 1; // q contained
+        }
+        if (q_begin >= t_begin && (q_length - q_end) >= (t_length - t_end)) {
+            return 2; // t contained
+        }
+        if (q_begin > t_begin) {
+            return 3; // q - t overlap
+        }
+        return 4; // t - q overlap
+    };
 
     while (true) {
         logger_->log();
 
-        std::uint64_t l = sequences.size();
-        std::uint64_t ll = Sequence::num_objects;
-        bool status = sparser_->parse(sequences, kChunkSize);
+        std::uint32_t l = sequences.size();
+        bool status = sparser->parse(sequences, kChunkSize);
 
         std::sort(sequences.begin() + l, sequences.end(),
-            [] (const std::unique_ptr<Sequence>& lhs,
-                const std::unique_ptr<Sequence>& rhs) -> bool {
-                return lhs->data().size() > rhs->data().size();
+            [] (const std::unique_ptr<ram::Sequence>& lhs,
+                const std::unique_ptr<ram::Sequence>& rhs) -> bool {
+                return lhs->data.size() > rhs->data.size();
             }
         );
+        for (std::uint32_t i = l; i < sequences.size(); ++i) {
+            sequences[i]->id = i - l;
+        }
 
         logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
         logger_->log();
 
-        minimizers.resize(sequences.size() - l);
-        for (std::uint64_t i = l; i < sequences.size(); ++i) {
-            if (sequences[i]->data().size() < 10000) {
-                break;
-            }
-            thread_futures.emplace_back(thread_pool_->submit(
-                [&minimizers, &sequences, l, k, w] (std::uint64_t i) -> void {
-                    ram::createMinimizers(minimizers[i - l],
-                        sequences[i]->data().c_str(), sequences[i]->data().size(),
-                        i, k, w);
-                }
-            , i));
-        }
-        std::uint64_t num_minimizers = 0;
-        for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
-            thread_futures[i].wait();
-            num_minimizers += minimizers[i].size();
-        }
-        thread_futures.clear();
+        minimizer_engine.minimize(sequences.begin() + l, sequences.begin() + l +
+            (sequences.size() - l), f);
 
-        std::cerr << "[rala::Graph::selfconstruct] num minimizers = "
-                  << num_minimizers << std::endl;
         logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
         logger_->log();
 
-        ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
+        std::vector<uint8_t> is_valid(sequences.size(), 1);
 
-        logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
-        logger_->log();
-
-        counts.clear();
-        for (std::uint32_t i = 0; i < index.size(); ++i) {
-            for (const auto& it: index[i]) {
-                counts.emplace_back(it.second.second);
-            }
-        }
-
-        std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
-            counts.end());
-        std::uint32_t max_occurence = counts[(1 - f) * counts.size()];
-
-        std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
-                  << max_occurence << std::endl;
-        logger_->log("[rala::Graph::selfconstruct] found occurences in");
-        logger_->log();
-
-        std::vector<std::uint32_t> sequence_lengths;
-        for (std::uint32_t i = 0; i < sequences.size(); ++i) {
-            sequence_lengths.emplace_back(sequences[i]->data().size());
-        }
-
-        std::vector<std::uint32_t> id_map;
-        for (std::uint32_t i = 0, j = l; i < l; ++i) {
-            while (j < sequences.size() && sequences[i]->data().size() < sequences[j]->data().size()) {
-                ++j;
-            }
-            id_map.emplace_back(j);
-        }
-
+        std::vector<std::future<void>> thread_futures;
         for (std::uint32_t i = 0; i < sequences.size(); ++i) {
             thread_futures.emplace_back(thread_pool_->submit(
-                [&sequences, &sequence_lengths, &hash, &index, &id_map, l, e, k, w, max_occurence] (std::uint32_t i) -> void {
-                    std::vector<ram::uint128_t> sequence_minimizers;
-                    if (sequences[i]->data().size() <= 2 * e) {
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str(), sequences[i]->data().size(),
-                            i < l ? id_map[i] : i, k, w);
-                    } else {
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str(), e,
-                            i < l ? id_map[i] : i, k, w);
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str() + sequences[i]->data().size() - e, e,
-                            (i < l ? id_map[i] : i) + 1, k, w);
+                [&] (std::uint32_t i) -> void {
+                    auto overlaps = minimizer_engine.map(sequences[i], true, true);
+                    for (const auto& it: overlaps) {
+                        auto type = overlap_type(i, it);
+                        if (type == 1) {
+                            is_valid[i] = 0;
+                            //break;
+                        } else if (type == 2) {
+                            is_valid[it.t_id] = 0;
+                        }
                     }
-
-                    std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
-
-                    bool ic = ram::is_contained(sequence_minimizers, hash, index,
-                        i < l ? id_map[i] : i, sequences[i]->data().size() - e,
-                        max_occurence, sequences[i]->data().size(),
-                        sequence_lengths);
-
-                    if (ic) {
-                        sequences[i].reset();
-                    }
-                }, i));
+                }
+            , i));
         }
         for (const auto& it: thread_futures) {
             it.wait();
         }
-        thread_futures.clear();
-
-        shrinkToFit(sequences, 0);
 
         logger_->log("[rala::Graph::selfconstruct] mapped in");
         logger_->log();
 
+        for (std::uint32_t i = l; i < sequences.size(); ++i) {
+            if (!is_valid[i]) {
+                sequences[i].reset();
+            }
+        }
+        shrinkToFit(sequences, l);
+
         // map new to old
-        for (l = 0; l < sequences.size() && sequences[l]->id() < ll; ++l);
         if (l == 0) {
             if (!status) {
                 break;
@@ -565,8 +532,7 @@ void Graph::selfconstruct() {
             continue;
         }
 
-        minimizers.resize(l);
-        for (std::uint32_t i = 0; i < l; ++i) {
+        /*for (std::uint32_t i = 0; i < l; ++i) {
             if (sequences[i]->data().size() < 10000) {
                 break;
             }
@@ -657,7 +623,7 @@ void Graph::selfconstruct() {
         shrinkToFit(sequences, 0);
 
         logger_->log("[rala::Graph::selfconstruct] mapped in");
-
+        */
         if (!status) {
             break;
         }
@@ -668,7 +634,7 @@ void Graph::selfconstruct() {
 
     logger_->log();
 
-    piles_.resize(Sequence::num_objects);
+    /*piles_.resize(Sequence::num_objects);
 
     std::sort(sequences.begin(), sequences.end(),
         [] (const std::unique_ptr<Sequence>& lhs,
@@ -801,9 +767,9 @@ void Graph::selfconstruct() {
                         matches[j + indices.back()].second << 32 >> 32 :
                         matches[j + indices.front()].second << 32 >> 32);
 
-                    /*if (piles_[target_id] == nullptr) {
-                        piles_[target_id] = createPile(target_id, sequence_lengths[target_id]);
-                    }*/
+                    //if (piles_[target_id] == nullptr) {
+                    //    piles_[target_id] = createPile(target_id, sequence_lengths[target_id]);
+                    //}
 
                     overlaps.emplace_back(new Overlap(it->id(), target_id, 0, 0,
                         !strand, query_begin, query_end, it->data().size(),
@@ -820,9 +786,10 @@ void Graph::selfconstruct() {
             break;
         }
     }
+    */
 
-    std::cerr << "[rala::Graph::selfconstruct] num overlaps = "
-              << overlaps.size() << std::endl;
+    //std::cerr << "[rala::Graph::selfconstruct] num overlaps = "
+    //          << overlaps.size() << std::endl;
 }
 
 void Graph::construct(const std::string& sensitive_overlaps_path) {

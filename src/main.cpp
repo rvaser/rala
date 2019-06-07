@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
 
     auto graph = rala::createGraph(input_paths[0], input_paths.size() > 1 ?
         input_paths[1] : "", num_threads);
+    graph->path_ = input_paths[0];
     graph->construct(sensitive_overlaps_path);
 
     if (preconstruct) {

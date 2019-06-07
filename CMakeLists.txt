@@ -17,8 +17,7 @@ add_executable(rala
     src/main.cpp
     src/overlap.cpp
     src/pile.cpp
-    src/sequence.cpp
-    vendor/ram/src/minimizers.cpp)
+    src/sequence.cpp)
 
 include_directories(${PROJECT_SOURCE_DIR}/vendor)
 
@@ -31,8 +30,11 @@ endif()
 if (NOT TARGET logger)
     add_subdirectory(vendor/logger EXCLUDE_FROM_ALL)
 endif()
+if (NOT TARGET ram)
+    add_subdirectory(vendor/ram)
+endif()
 
-target_link_libraries(rala bioparser thread_pool logger)
+target_link_libraries(rala bioparser thread_pool logger ram)
 
 if (rala_build_tests)
 
