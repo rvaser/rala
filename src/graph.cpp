@@ -517,106 +517,6 @@ void Graph::selfconstruct() {
         }
         shrinkToFit(sequences, l);
 
-        // map new to old
-        /*if (l == 0) {
-            if (!status) {
-                break;
-            }
-            continue;
-        }
-
-        for (std::uint32_t i = 0; i < l; ++i) {
-            if (sequences[i]->data().size() < 10000) {
-                break;
-            }
-            thread_futures.emplace_back(thread_pool_->submit(
-                [&minimizers, &sequences, k, w] (std::uint32_t i) -> void {
-                    ram::createMinimizers(minimizers[i],
-                        sequences[i]->data().c_str(), sequences[i]->data().size(),
-                        i, k, w);
-                }
-            , i));
-        }
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-        thread_futures.clear();
-
-        logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
-        logger_->log();
-
-        ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
-
-        logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
-        logger_->log();
-
-        counts.clear();
-        for (std::uint32_t i = 0; i < index.size(); ++i) {
-            for (const auto& it: index[i]) {
-                counts.emplace_back(it.second.second);
-            }
-        }
-
-        std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
-            counts.end());
-        max_occurence = counts[(1 - f) * counts.size()];
-
-        std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
-                  << max_occurence << std::endl;
-        logger_->log("[rala::Graph::selfconstruct] found occurences in");
-        logger_->log();
-
-        sequence_lengths.clear();
-        for (std::uint32_t i = 0; i < sequences.size(); ++i) {
-            sequence_lengths.emplace_back(sequences[i]->data().size());
-        }
-
-        id_map.clear();
-        for (std::uint32_t i = l, j = 0; i < sequences.size(); ++i) {
-            while (j < l && sequences[i]->data().size() < sequences[j]->data().size()) {
-                ++j;
-            }
-            id_map.emplace_back(j);
-        }
-
-        for (std::uint32_t i = l; i < sequences.size(); ++i) {
-            thread_futures.emplace_back(thread_pool_->submit(
-                [&sequences, &sequence_lengths, &hash, &index, &id_map, l, e, k, w, max_occurence] (std::uint32_t i) -> void {
-                    std::vector<ram::uint128_t> sequence_minimizers;
-                    if (sequences[i]->data().size() <= 2 * e) {
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str(), sequences[i]->data().size(),
-                            id_map[i - l], k, w);
-                    } else {
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str(), e,
-                            id_map[i - l], k, w);
-                        ram::createMinimizers(sequence_minimizers,
-                            sequences[i]->data().c_str() + sequences[i]->data().size() - e, e,
-                            id_map[i - l] + 1, k, w);
-                    }
-
-                    std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
-
-                    bool ic = ram::is_contained(sequence_minimizers, hash, index,
-                        id_map[i - l], sequences[i]->data().size() - e, max_occurence,
-                        sequences[i]->data().size(), sequence_lengths);
-
-                    if (ic) {
-                        sequences[i].reset();
-                    }
-                }
-            , i));
-        }
-        for (const auto& it: thread_futures) {
-            it.wait();
-        }
-        thread_futures.clear();
-
-        shrinkToFit(sequences, 0);
-
-        logger_->log("[rala::Graph::selfconstruct] mapped in");
-        */
         if (!status) {
             break;
         }
@@ -696,10 +596,6 @@ void Graph::selfconstruct() {
     logger_->log("[rala::Graph::selfconstruct] trimmed in");
     logger_->log();
 
-    /*for (const auto& it: sequences) {
-        std::cout << ">" << it->name << std::endl << it->data << std::endl;
-    }*/
-
     // overlap remaining sequences and create the graph
     for (std::uint32_t i = 0; i < sequences.size(); ++i) {
         sequences[i]->id = i;
@@ -728,14 +624,8 @@ void Graph::selfconstruct() {
     std::vector<std::uint32_t> srcs;
     std::vector<std::uint8_t> is_valid(sequences.size(), 1);
 
-    std::uint32_t no = 0;
     for (std::uint32_t i = 0; i < sequences.size(); ++i) {
         auto overlaps = minimizer_engine.map(sequences[i], true, true);
-        for (const auto& it: overlaps) {
-            std::cout << sequences[i]->name << "\t" << sequences[i]->data.size() << "\t" << it.q_begin << "\t" << it.q_end << "\t" << (it.strand == 1 ? '+' : '-') << "\t"
-                      << sequences[it.t_id]->name << "\t" << sequences[it.t_id]->data.size() << "\t" << it.t_begin << "\t" << it.t_end << std::endl;
-        }
-        no += overlaps.size();
         for (std::uint32_t j = 0, k, l; j < overlaps.size();) {
             for (k = j + 1; k < overlaps.size() && overlaps[k].t_id == overlaps[j].t_id; ++k);
             for (l = j; j < k; ++j) {
@@ -746,8 +636,8 @@ void Graph::selfconstruct() {
 
             switch (overlap_type(i, overlaps[l])) {
                 case 0: break;
-                case 1: is_valid[overlaps[l].t_id] = 0; break;
-                case 2: is_valid[i] = 0; break;
+                case 1: is_valid[i] = 0; break;
+                case 2: is_valid[overlaps[l].t_id] = 0; break;
                 case 3:
                 case 4:
                 default:
@@ -757,10 +647,6 @@ void Graph::selfconstruct() {
             }
         }
     }
-    std::cerr << no << std::endl;
-    //exit(1);
-
-    std::cerr << "Num edges = " << edges.size() << std::endl;
 
     std::vector<std::uint32_t> sequence_to_node(sequences.size(), -1);
     std::uint32_t num_nodes = 0;
@@ -786,8 +672,6 @@ void Graph::selfconstruct() {
         // sequences[i].reset();
         ++num_nodes;
     }
-
-    std::cerr << "Num nodes = " << num_nodes << std::endl;
 
     for (std::uint32_t i = 0, edge_id = 0; i < edges.size(); ++i) {
         if (sequence_to_node[srcs[i]] == -1 || sequence_to_node[edges[i].t_id] == -1) {
@@ -815,7 +699,6 @@ void Graph::selfconstruct() {
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_b->pair_, node_a->pair_, (b_length - b_end) -
                 (a_length - a_end)));
-            std::cerr << a_begin - b_begin << " " << (b_length - b_end) - (a_length - a_end) << std::endl;
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -834,8 +717,6 @@ void Graph::selfconstruct() {
             std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
                 node_a->pair_, node_b->pair_, (a_length - a_end) -
                 (b_length - b_end)));
-
-            std::cerr << b_begin - a_begin << " " << (a_length - a_end) - (b_length - b_end) << std::endl;
 
             edge->pair_ = edge_complement.get();
             edge_complement->pair_ = edge.get();
@@ -856,7 +737,6 @@ void Graph::selfconstruct() {
             numt += 1;
         }
     }
-    std::cerr << "Num nodes without edges = " << numt << std::endl;
 
     print_csv("assembly.csv");
 
@@ -1105,6 +985,8 @@ void Graph::simplify() {
             break;
         }
     }
+
+    return;
 
     shrink(42);
     uint32_t num_long_edges = 0;
