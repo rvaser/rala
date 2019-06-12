@@ -440,6 +440,9 @@ void Graph::selfconstruct() {
     auto sparser = bioparser::createParser<bioparser::FastaParser, ram::Sequence>(path_);
 
     auto overlap_type = [&sequences] (uint32_t q_id, const ram::Overlap& o) -> uint8_t {
+        if (sequences[q_id] == nullptr || sequences[o.t_id] == nullptr) {
+            return 0;
+        }
         std::uint32_t q_length = sequences[q_id]->data.size();
         std::uint32_t q_begin = o.q_begin;
         std::uint32_t q_end = o.q_end;
@@ -471,16 +474,6 @@ void Graph::selfconstruct() {
 
         std::uint32_t l = sequences.size();
         bool status = sparser->parse(sequences, kChunkSize);
-
-        std::sort(sequences.begin() + l, sequences.end(),
-            [] (const std::unique_ptr<ram::Sequence>& lhs,
-                const std::unique_ptr<ram::Sequence>& rhs) -> bool {
-                return lhs->data.size() > rhs->data.size();
-            }
-        );
-        for (std::uint32_t i = l; i < sequences.size(); ++i) {
-            sequences[i]->id = i - l;
-        }
 
         logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
         logger_->log();
@@ -525,14 +518,14 @@ void Graph::selfconstruct() {
         shrinkToFit(sequences, l);
 
         // map new to old
-        if (l == 0) {
+        /*if (l == 0) {
             if (!status) {
                 break;
             }
             continue;
         }
 
-        /*for (std::uint32_t i = 0; i < l; ++i) {
+        for (std::uint32_t i = 0; i < l; ++i) {
             if (sequences[i]->data().size() < 10000) {
                 break;
             }
@@ -634,151 +627,47 @@ void Graph::selfconstruct() {
 
     logger_->log();
 
-    /*piles_.resize(Sequence::num_objects);
-
-    std::sort(sequences.begin(), sequences.end(),
-        [] (const std::unique_ptr<Sequence>& lhs,
-            const std::unique_ptr<Sequence>& rhs) -> bool {
-            return lhs->id() < rhs->id();
-        }
-    );
+    piles_.resize(sequences.size());
 
     Sequence::num_objects = 0;
-    sparser_->reset();
+    sparser->reset();
     f = 0.00001;
 
-    minimizers.resize(sequences.size());
-    for (std::uint64_t i = 0; i < sequences.size(); ++i) {
-        thread_futures.emplace_back(thread_pool_->submit(
-            [&minimizers, &sequences, k, w] (std::uint64_t i) -> void {
-                ram::createMinimizers(minimizers[i],
-                    sequences[i]->data().c_str(), sequences[i]->data().size(),
-                    sequences[i]->id(), k, w);
-            }
-        , i));
+    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+        sequences[i]->id = i;
+        piles_[i] = createPile(i, sequences[i]->data.size());
     }
-    std::uint64_t num_minimizers = 0;
-    for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
-        thread_futures[i].wait();
-        num_minimizers += minimizers[i].size();
-    }
-    thread_futures.clear();
-
-    std::cerr << "[rala::Graph::selfconstruct] num minimizers = "
-              << num_minimizers << std::endl;
+    minimizer_engine.minimize(sequences.begin(), sequences.end(), f);
 
     logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
     logger_->log();
 
-    ram::transformMinimizers(hash, index, minimizers, k, thread_pool_);
-
-    logger_->log("[rala::Graph::selfconstruct] transformed minimizers in");
-    logger_->log();
-
-    counts.clear();
-    for (std::uint32_t i = 0; i < index.size(); ++i) {
-        for (const auto& it: index[i]) {
-            counts.emplace_back(it.second.second);
-        }
-    }
-
-    std::nth_element(counts.begin(), counts.begin() + (1 - f) * counts.size(),
-        counts.end());
-    std::uint32_t max_occurence = counts[(1 - f) * counts.size()];
-
-    std::cerr << "[rala::Graph::selfconstruct] max minimizer occurence = "
-              << max_occurence << std::endl;
-    logger_->log("[rala::Graph::selfconstruct] found occurences in");
-    logger_->log();
-
-    std::vector<std::unique_ptr<Overlap>> overlaps;
-    std::vector<std::uint32_t> sequence_lengths(piles_.size());
-    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
-        sequence_lengths[sequences[i]->id()] = sequences[i]->data().size();
-    }
+    std::vector<std::vector<uint32_t>> bounds(sequences.size());
 
     while (true) {
         logger_->log();
 
-        std::vector<std::unique_ptr<Sequence>> tmp;
-        bool status = sparser_->parse(tmp, kChunkSize);
+        std::uint32_t l = sequences.size();
+        bool status = sparser->parse(sequences, kChunkSize);
 
         logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
         logger_->log();
 
-        for (const auto& it: tmp) {
-            std::vector<ram::uint128_t> sequence_minimizers;
-            ram::createMinimizers(sequence_minimizers,
-                it->data().c_str(), it->data().size(),
-                it->id(), k, w);
+        for (std::uint32_t i = l; i < sequences.size(); ++i) {
+            auto overlaps = minimizer_engine.map(sequences[i], true, false);
 
-            ram::sortMinimizers(sequence_minimizers, k);
-            //std::sort(sequence_minimizers.begin(), sequence_minimizers.end());
-
-            auto matches = ram::map(sequence_minimizers, hash, index,
-                it->id(), 0, max_occurence, true, false);
-
-            ram::sortMinimizers(matches, 32);
-            //std::sort(matches.begin(), matches.end());
-
-            auto op_less = std::less<std::uint64_t>();
-            auto op_greater = std::greater<std::uint64_t>();
-
-            matches.emplace_back(-1, -1); // stop dummy
-            for (std::uint32_t i = 1, j = 0; i < matches.size(); ++i) {
-                if ((matches[i].first >> 32) != (matches[i - 1].first >> 32) ||
-                    (matches[i].first << 32 >> 32) - (matches[i - 1].first << 32 >> 32) > 500) {
-
-                    if (i - j < 4) {
-                        j = i;
-                        continue;
-                    }
-
-                    std::sort(matches.begin() + j, matches.begin() + i,
-                        [] (const ram::uint128_t& lhs, const ram::uint128_t& rhs) {
-                            return lhs.second < rhs.second;
-                        }
-                    );
-
-                    std::vector<std::uint32_t> indices;
-                    bool strand = (matches[i - 1].first >> 32) & 1;
-                    if (strand) {
-                        indices = ram::longestSubsequence(matches.begin() + j,
-                            matches.begin() + i, op_less);
-                    } else {
-                        indices = ram::longestSubsequence(matches.begin() + j,
-                            matches.begin() + i, op_greater);
-                    }
-
-                    if (indices.size() < 4 ||
-                        (matches[j + indices.back()].second >> 32) - (matches[j + indices.front()].second >> 32) < 100 ||
-                        abs((matches[j + indices.back()].second << 32 >> 32) - (matches[j + indices.front()].second << 32 >> 32) < 100)) {
-                        j = i;
-                        continue;
-                    }
-
-                    std::uint64_t target_id = matches[i - 1].first >> 33;
-                    std::uint32_t target_begin = matches[j + indices.front()].second >> 32;
-                    std::uint32_t target_end = k + (matches[j + indices.back()].second >> 32);
-                    std::uint32_t query_begin = strand ?
-                        matches[j + indices.front()].second << 32 >> 32 :
-                        matches[j + indices.back()].second << 32 >> 32;
-                    std::uint32_t query_end = k + (strand ?
-                        matches[j + indices.back()].second << 32 >> 32 :
-                        matches[j + indices.front()].second << 32 >> 32);
-
-                    //if (piles_[target_id] == nullptr) {
-                    //    piles_[target_id] = createPile(target_id, sequence_lengths[target_id]);
-                    //}
-
-                    overlaps.emplace_back(new Overlap(it->id(), target_id, 0, 0,
-                        !strand, query_begin, query_end, it->data().size(),
-                        0, target_begin, target_end, sequence_lengths[target_id]));
-
-                    j = i;
-                }
+            for (const auto& it: overlaps) {
+                bounds[it.t_id].emplace_back(it.t_begin << 1);
+                bounds[it.t_id].emplace_back(it.t_end << 1 | 1);
             }
         }
+
+        for (std::uint32_t i = 0; i < l; ++i) {
+            piles_[i]->add_layers(bounds[i]);
+            bounds[i].clear();
+        }
+
+        sequences.resize(l);
 
         logger_->log("[rala::Graph::selfconstruct] mapped in");
 
@@ -786,10 +675,192 @@ void Graph::selfconstruct() {
             break;
         }
     }
-    */
 
-    //std::cerr << "[rala::Graph::selfconstruct] num overlaps = "
-    //          << overlaps.size() << std::endl;
+    logger_->log();
+
+    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+        if (piles_[i]->find_valid_region() == false) {
+            sequences[i].reset();
+            piles_[i].reset();
+        } else {
+            sequences[i]->data = sequences[i]->data.substr(piles_[i]->begin(),
+                piles_[i]->end() - piles_[i]->begin());
+        }
+    }
+    shrinkToFit(sequences, 0);
+    shrinkToFit(piles_, 0);
+
+    std::cerr << "[rala::Graph::selfconstruct] num sequences = "
+              << sequences.size() << std::endl;
+
+    logger_->log("[rala::Graph::selfconstruct] trimmed in");
+    logger_->log();
+
+    /*for (const auto& it: sequences) {
+        std::cout << ">" << it->name << std::endl << it->data << std::endl;
+    }*/
+
+    // overlap remaining sequences and create the graph
+    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+        sequences[i]->id = i;
+    }
+    minimizer_engine.minimize(sequences.begin(), sequences.end(), 0.001);
+
+    auto reverse_complement = [] (const std::unique_ptr<ram::Sequence>& s) -> std::string {
+        std::string dst;
+        for (const auto& it: s->data) {
+            switch (it) {
+                case 'A': dst += 'T'; break;
+                case 'T': dst += 'A'; break;
+                case 'C': dst += 'G'; break;
+                case 'G': dst += 'C'; break;
+                default: dst += it; break;
+            }
+        }
+        std::reverse(dst.begin(), dst.end());
+        return dst;
+    };
+    auto overlap_length = [] (const ram::Overlap& o) -> uint32_t {
+        return std::max(o.q_end - o.q_begin, o.t_end - o.t_begin);
+    };
+
+    std::vector<ram::Overlap> edges;
+    std::vector<std::uint32_t> srcs;
+    std::vector<std::uint8_t> is_valid(sequences.size(), 1);
+
+    std::uint32_t no = 0;
+    for (std::uint32_t i = 0; i < sequences.size(); ++i) {
+        auto overlaps = minimizer_engine.map(sequences[i], true, true);
+        for (const auto& it: overlaps) {
+            std::cout << sequences[i]->name << "\t" << sequences[i]->data.size() << "\t" << it.q_begin << "\t" << it.q_end << "\t" << (it.strand == 1 ? '+' : '-') << "\t"
+                      << sequences[it.t_id]->name << "\t" << sequences[it.t_id]->data.size() << "\t" << it.t_begin << "\t" << it.t_end << std::endl;
+        }
+        no += overlaps.size();
+        for (std::uint32_t j = 0, k, l; j < overlaps.size();) {
+            for (k = j + 1; k < overlaps.size() && overlaps[k].t_id == overlaps[j].t_id; ++k);
+            for (l = j; j < k; ++j) {
+                if (overlap_length(overlaps[l]) < overlap_length(overlaps[j])) {
+                    l = j;
+                }
+            }
+
+            switch (overlap_type(i, overlaps[l])) {
+                case 0: break;
+                case 1: is_valid[overlaps[l].t_id] = 0; break;
+                case 2: is_valid[i] = 0; break;
+                case 3:
+                case 4:
+                default:
+                    srcs.emplace_back(i);
+                    edges.emplace_back(overlaps[l]);
+                    break;
+            }
+        }
+    }
+    std::cerr << no << std::endl;
+    //exit(1);
+
+    std::cerr << "Num edges = " << edges.size() << std::endl;
+
+    std::vector<std::uint32_t> sequence_to_node(sequences.size(), -1);
+    std::uint32_t num_nodes = 0;
+    for (std::uint32_t i = 0, node_id = 0; i < sequences.size(); ++i) {
+        if (is_valid[i] == 0) {
+            sequences[i].reset();
+            continue;
+        }
+
+        sequence_to_node[i] = node_id;
+
+        std::unique_ptr<Node> node(new Node(node_id++, i, sequences[i]->name,
+            sequences[i]->data));
+        std::unique_ptr<Node> node_complement(new Node(node_id++, i,
+            sequences[i]->name, reverse_complement(sequences[i])));
+
+        node->pair_ = node_complement.get();
+        node_complement->pair_ = node.get();
+
+        nodes_.emplace_back(std::move(node));
+        nodes_.emplace_back(std::move(node_complement));
+
+        // sequences[i].reset();
+        ++num_nodes;
+    }
+
+    std::cerr << "Num nodes = " << num_nodes << std::endl;
+
+    for (std::uint32_t i = 0, edge_id = 0; i < edges.size(); ++i) {
+        if (sequence_to_node[srcs[i]] == -1 || sequence_to_node[edges[i].t_id] == -1) {
+            continue;
+        }
+        Node* node_a = nodes_[sequence_to_node[srcs[i]]].get();
+        Node* node_b = nodes_[sequence_to_node[edges[i].t_id] +
+            (edges[i].strand == 1 ? 0 : 1)].get();
+
+        std::uint32_t a_length = node_a->data_.size();
+        std::uint32_t a_begin = edges[i].q_begin;
+        std::uint32_t a_end = edges[i].q_end;
+
+        std::uint32_t b_length = node_b->data_.size();
+        std::uint32_t b_begin = edges[i].strand == 1 ?
+            edges[i].t_begin : b_length - edges[i].t_end;
+        std::uint32_t b_end = edges[i].strand == 1 ?
+            edges[i].t_end : b_length - edges[i].t_begin;
+
+        auto type = overlap_type(srcs[i], edges[i]);
+
+        if (type == 3) {
+            std::unique_ptr<Edge> edge(new Edge(edge_id++, node_a, node_b,
+                a_begin - b_begin));
+            std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
+                node_b->pair_, node_a->pair_, (b_length - b_end) -
+                (a_length - a_end)));
+            std::cerr << a_begin - b_begin << " " << (b_length - b_end) - (a_length - a_end) << std::endl;
+
+            edge->pair_ = edge_complement.get();
+            edge_complement->pair_ = edge.get();
+
+            node_a->suffix_edges_.emplace_back(edge.get());
+            node_a->pair_->prefix_edges_.emplace_back(edge_complement.get());
+            node_b->prefix_edges_.emplace_back(edge.get());
+            node_b->pair_->suffix_edges_.emplace_back(edge_complement.get());
+
+            edges_.emplace_back(std::move(edge));
+            edges_.emplace_back(std::move(edge_complement));
+
+        } else if (type == 4) {
+            std::unique_ptr<Edge> edge(new Edge(edge_id++, node_b, node_a,
+                b_begin - a_begin));
+            std::unique_ptr<Edge> edge_complement(new Edge(edge_id++,
+                node_a->pair_, node_b->pair_, (a_length - a_end) -
+                (b_length - b_end)));
+
+            std::cerr << b_begin - a_begin << " " << (a_length - a_end) - (b_length - b_end) << std::endl;
+
+            edge->pair_ = edge_complement.get();
+            edge_complement->pair_ = edge.get();
+
+            node_b->suffix_edges_.emplace_back(edge.get());
+            node_b->pair_->prefix_edges_.emplace_back(edge_complement.get());
+            node_a->prefix_edges_.emplace_back(edge.get());
+            node_a->pair_->suffix_edges_.emplace_back(edge_complement.get());
+
+            edges_.emplace_back(std::move(edge));
+            edges_.emplace_back(std::move(edge_complement));
+        }
+    }
+
+    std::uint32_t numt = 0;
+    for (const auto& it: nodes_) {
+        if (it->indegree() == 0 && it->outdegree() == 0) {
+            numt += 1;
+        }
+    }
+    std::cerr << "Num nodes without edges = " << numt << std::endl;
+
+    print_csv("assembly.csv");
+
+    logger_->log("[rala::Graph::selfconstruct] created assembly graph in");
 }
 
 void Graph::construct(const std::string& sensitive_overlaps_path) {
