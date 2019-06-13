@@ -989,8 +989,6 @@ void Graph::simplify() {
         }
     }
 
-    return;
-
     shrink(42);
     uint32_t num_long_edges = 0;
     for (uint32_t i = 0; i < 5; ++i) {
@@ -1402,7 +1400,7 @@ void Graph::postprocess() {
     }
 
     std::vector<std::unordered_set<uint64_t>> components;
-    std::vector<bool> is_visited(piles_.size(), false);
+    std::vector<bool> is_visited(nodes_.size(), false);
     for (uint64_t i = 0; i < nodes_.size(); ++i) {
         if (nodes_[i] == nullptr || is_visited[i]) {
             continue;
