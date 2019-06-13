@@ -437,7 +437,7 @@ void Graph::selfconstruct() {
     ram::MinimizerEngine minimizer_engine(k, w, thread_pool_->num_threads());
 
     std::vector<std::unique_ptr<ram::Sequence>> sequences;
-    auto sparser = bioparser::createParser<bioparser::FastaParser, ram::Sequence>(path_);
+    auto sparser = bioparser::createParser<bioparser::FastqParser, ram::Sequence>(path_);
 
     auto overlap_type = [&sequences] (uint32_t q_id, const ram::Overlap& o) -> uint8_t {
         if (sequences[q_id] == nullptr || sequences[o.t_id] == nullptr) {
@@ -474,6 +474,9 @@ void Graph::selfconstruct() {
 
         std::uint32_t l = sequences.size();
         bool status = sparser->parse(sequences, kChunkSize);
+        for (uint32_t i = 0; i < sequences.size(); ++i) {
+            sequences[i]->id = i;
+        }
 
         logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
         logger_->log();
