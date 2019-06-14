@@ -437,7 +437,7 @@ void Graph::selfconstruct() {
     ram::MinimizerEngine minimizer_engine(k, w, thread_pool_->num_threads());
 
     std::vector<std::unique_ptr<ram::Sequence>> sequences;
-    auto sparser = bioparser::createParser<bioparser::FastqParser, ram::Sequence>(path_);
+    auto sparser = bioparser::createParser<bioparser::FastaParser, ram::Sequence>(path_);
 
     auto overlap_type = [&sequences] (uint32_t q_id, const ram::Overlap& o) -> uint8_t {
         if (sequences[q_id] == nullptr || sequences[o.t_id] == nullptr) {
@@ -474,6 +474,12 @@ void Graph::selfconstruct() {
 
         std::uint32_t l = sequences.size();
         bool status = sparser->parse(sequences, kChunkSize);
+
+        std::sort(sequences.begin(), sequences.end(),
+            [] (const std::unique_ptr<ram::Sequence>& lhs,
+                const std::unique_ptr<ram::Sequence>& rhs) -> bool {
+                return lhs->data.size() > rhs->data.size();
+            });
         for (uint32_t i = 0; i < sequences.size(); ++i) {
             sequences[i]->id = i;
         }
@@ -498,7 +504,6 @@ void Graph::selfconstruct() {
                         auto type = overlap_type(i, it);
                         if (type == 1) {
                             is_valid[i] = 0;
-                            //break;
                         } else if (type == 2) {
                             is_valid[it.t_id] = 0;
                         }
@@ -556,9 +561,17 @@ void Graph::selfconstruct() {
         logger_->log("[rala::Graph::selfconstruct] parsed chunk of sequences in");
         logger_->log();
 
+        std::vector<std::future<std::vector<ram::Overlap>>> thread_futures;
         for (std::uint32_t i = l; i < sequences.size(); ++i) {
-            auto overlaps = minimizer_engine.map(sequences[i], true, false);
-
+            thread_futures.emplace_back(thread_pool_->submit(
+                [&] (std::uint32_t i) -> std::vector<ram::Overlap> {
+                    return minimizer_engine.map(sequences[i], true, false);
+                }
+            , i));
+        }
+        for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
+            thread_futures[i].wait();
+            auto overlaps = thread_futures[i].get();
             for (const auto& it: overlaps) {
                 bounds[it.t_id].emplace_back(it.t_begin << 1);
                 bounds[it.t_id].emplace_back(it.t_end << 1 | 1);
@@ -627,8 +640,18 @@ void Graph::selfconstruct() {
     std::vector<std::uint32_t> srcs;
     std::vector<std::uint8_t> is_valid(sequences.size(), 1);
 
+    std::vector<std::future<std::vector<ram::Overlap>>> thread_futures;
     for (std::uint32_t i = 0; i < sequences.size(); ++i) {
-        auto overlaps = minimizer_engine.map(sequences[i], true, true);
+        thread_futures.emplace_back(thread_pool_->submit(
+            [&] (std::uint32_t i) -> std::vector<ram::Overlap> {
+                return minimizer_engine.map(sequences[i], true, true);
+            }
+        , i));
+    }
+    for (std::uint32_t i = 0; i < thread_futures.size(); ++i) {
+        thread_futures[i].wait();
+        auto overlaps = thread_futures[i].get();
+
         for (std::uint32_t j = 0, k, l; j < overlaps.size();) {
             for (k = j + 1; k < overlaps.size() && overlaps[k].t_id == overlaps[j].t_id; ++k);
             for (l = j; j < k; ++j) {
