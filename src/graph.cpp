@@ -475,11 +475,11 @@ void Graph::selfconstruct() {
         std::uint32_t l = sequences.size();
         bool status = sparser->parse(sequences, kChunkSize);
 
-        std::sort(sequences.begin(), sequences.end(),
+        /*std::sort(sequences.begin(), sequences.end(),
             [] (const std::unique_ptr<ram::Sequence>& lhs,
                 const std::unique_ptr<ram::Sequence>& rhs) -> bool {
                 return lhs->data.size() > rhs->data.size();
-            });
+            });*/
         for (uint32_t i = 0; i < sequences.size(); ++i) {
             sequences[i]->id = i;
         }
@@ -488,7 +488,8 @@ void Graph::selfconstruct() {
         logger_->log();
 
         minimizer_engine.minimize(sequences.begin() + l, sequences.begin() + l +
-            (sequences.size() - l), f);
+            (sequences.size() - l));
+        minimizer_engine.filter(f);
 
         logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
         logger_->log();
@@ -545,7 +546,8 @@ void Graph::selfconstruct() {
         sequences[i]->id = i;
         piles_[i] = createPile(i, sequences[i]->data.size());
     }
-    minimizer_engine.minimize(sequences.begin(), sequences.end(), f);
+    minimizer_engine.minimize(sequences.begin(), sequences.end());
+    minimizer_engine.filter(f);
 
     logger_->log("[rala::Graph::selfconstruct] collected minimizers in");
     logger_->log();
@@ -616,7 +618,9 @@ void Graph::selfconstruct() {
     for (std::uint32_t i = 0; i < sequences.size(); ++i) {
         sequences[i]->id = i;
     }
-    minimizer_engine.minimize(sequences.begin(), sequences.end(), 0.001);
+    f = 0.001;
+    minimizer_engine.minimize(sequences.begin(), sequences.end());
+    minimizer_engine.filter(f);
 
     auto reverse_complement = [] (const std::unique_ptr<ram::Sequence>& s) -> std::string {
         std::string dst;
