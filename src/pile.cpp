@@ -591,6 +591,30 @@ void Pile::check_repetitive_hills(const std::unique_ptr<Overlap>& overlap) {
     }
 }
 
+void Pile::check_repetitive_hills(std::uint32_t begin, std::uint32_t end) {
+
+    uint32_t fuzz = 420;
+
+    for (uint32_t i = 0; i < repeat_hills_.size(); ++i) {
+        if (begin < repeat_hills_[i].second && repeat_hills_[i].first < end) {
+            if (repeat_hills_[i].first < 0.1 * (this->end_ - this->begin_) + this->begin_ &&
+                begin - this->begin_ < this->end_ - end) {
+                // left hill
+                if (end >= repeat_hills_[i].second + fuzz) {
+                    repeat_hill_coverage_[i] = true;
+                }
+            } else if (repeat_hills_[i].second > 0.9 * (this->end_ - this->begin_) + this->begin_ &&
+                begin - this->begin_ > this->end_ - end) {
+                // right hill
+                if (begin + fuzz <= repeat_hills_[i].first) {
+                    repeat_hill_coverage_[i] = true;
+                }
+            }
+
+        }
+    }
+}
+
 void Pile::add_repetitive_region(uint32_t begin, uint32_t end) {
 
     if (begin > data_.size() || end > data_.size()) {

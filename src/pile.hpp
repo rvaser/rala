@@ -15,6 +15,8 @@ namespace rala {
 
 class Overlap;
 
+class Graph;
+
 class Pile;
 std::unique_ptr<Pile> createPile(uint64_t id, uint32_t sequence_length);
 
@@ -131,6 +133,7 @@ public:
      * @brief Adds coverage to repetitive hill (number of reads passing through)
      */
     void check_repetitive_hills(const std::unique_ptr<Overlap>& overlap);
+    void check_repetitive_hills(std::uint32_t begin, std::uint32_t end);
 
     /*
      * @brief Manually add repetitive region in data_
@@ -148,6 +151,7 @@ public:
      */
     std::string to_json() const;
 
+    friend Graph;
     friend std::unique_ptr<Pile> createPile(uint64_t id, uint32_t sequence_length);
 private:
     Pile(uint64_t id, uint32_t sequence_length);
