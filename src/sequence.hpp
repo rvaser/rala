@@ -21,6 +21,8 @@ namespace bioparser {
 
 namespace rala {
 
+class Graph;
+
 class Sequence;
 std::unique_ptr<Sequence> createSequence(const std::string& name,
     const std::string& data);
@@ -49,6 +51,7 @@ public:
     friend std::unique_ptr<Sequence> createSequence(const std::string& name,
         const std::string& data);
 
+    friend Graph;
     friend bioparser::FastaParser<Sequence>;
     friend bioparser::FastqParser<Sequence>;
 private:

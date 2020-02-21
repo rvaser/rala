@@ -402,6 +402,15 @@ void Graph::initialize() {
     }
     thread_futures.clear();
 
+    sparser_->reset();
+    std::vector<std::unique_ptr<Sequence>> seqs;
+    sparser_->parse_objects(seqs, -1);
+    for (std::uint32_t i = 0; i < seqs.size(); ++i) {
+        seqs[i]->name_ += " " + std::to_string(i);
+    }
+
+    std::ofstream osf("chimeric.fasta");
+
     std::ofstream os("chimeric.json");
     os << "{\"piles\":{";
     bool is_first = true;
@@ -413,10 +422,16 @@ void Graph::initialize() {
             }
             is_first = false;
             os << it->to_json();
+            osf << ">" << seqs[it->id()]->name() << std::endl;
+            osf << seqs[it->id()]->data().substr(it->begin(), it->end() - it->begin()) << std::endl;
         }
     }
     os << "}}";
     os.close();
+
+    osf.close();
+
+    exit(1);
 
     uint64_t num_prefiltered_sequences = 0;
     for (const auto& it: piles_) {

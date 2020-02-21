@@ -635,9 +635,10 @@ std::string Pile::to_json() const {
     ss << "\"" << id_ << "\":{";
 
     ss << "\"y\":[";
-    for (uint32_t i = 0; i < data_.size(); ++i) {
+    //for (uint32_t i = 0; i < data_.size(); ++i) {
+    for (uint32_t i = begin_; i < end_; ++i) {
         ss << data_[i];
-        if (i < data_.size() - 1) {
+        if (i < end_ - 1) {
             ss << ",";
         }
     }
@@ -646,6 +647,7 @@ std::string Pile::to_json() const {
     ss << "\"b\":" << begin_ << ",";
     ss << "\"e\":" << end_ << ",";
 
+    /*
     ss << "\"h\":[";
     for (uint32_t i = 0; i < repeat_hills_.size(); ++i) {
         ss << repeat_hills_[i].first << "," << repeat_hills_[i].second;
@@ -654,6 +656,7 @@ std::string Pile::to_json() const {
         }
     }
     ss << "],";
+    */
 
     ss << "\"m\":" << median_ << ",";
     ss << "\"p10\":" << p10_;
