@@ -30,7 +30,7 @@ class Plotter:
             eprint("[rala::Plotter::plot_pile] error: incomplete pile!")
             sys.exit(1);
 
-        x = xrange(len(pile["y"]))
+        x = range(len(pile["y"]))
         ax.set_ylim([0, ylimit])
 
         if (orientation == 0):

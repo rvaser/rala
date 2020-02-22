@@ -431,8 +431,6 @@ void Graph::initialize() {
 
     osf.close();
 
-    exit(1);
-
     uint64_t num_prefiltered_sequences = 0;
     for (const auto& it: piles_) {
         if (it == nullptr) {
@@ -1039,6 +1037,16 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
         }
     }
 
+    sparser_->reset();
+    std::vector<std::unique_ptr<Sequence>> seqs;
+    sparser_->parse_objects(seqs, -1);
+    for (std::uint32_t i = 0; i < seqs.size(); ++i) {
+        seqs[i]->name_ += " " + std::to_string(i);
+    }
+
+    std::ofstream osr("repeats.fasta");
+    std::ofstream osn("normal.fasta");
+
     std::ofstream os("repeats.json");
     os << "{\"piles\":{";
     bool is_first = true;
@@ -1054,18 +1062,28 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
             }
             is_first = false;
             os << it->to_json();
+
+            osr << ">" << seqs[it->id()]->name() << std::endl;
+            osr << seqs[it->id()]->data().substr(it->begin(), it->end() - it->begin()) << std::endl;
         } else if (it != nullptr && !it->has_chimeric_region()) {
             if (!is_first2) {
                 os2 << ",";
             }
             is_first2 = false;
             os2 << it->to_json();
+
+            osn << ">" << seqs[it->id()]->name() << std::endl;
+            osn << seqs[it->id()]->data().substr(it->begin(), it->end() - it->begin()) << std::endl;
         }
     }
     os << "}}";
     os.close();
     os2 << "}}";
     os2.close();
+
+    osn.close();
+    osr.close();
+
     exit(1);
 
     for (auto& it: overlaps) {
