@@ -46,14 +46,14 @@ class Plotter:
             begin = len(x) - pile["e"]
             end = len(x) - pile["b"]
 
-        if (type == "p"):
-            ax.axvline(begin + overlap_length, label="o", color="k", linestyle="--")
-        else:
-            ax.axvline(end - overlap_length, label="o", color="k", linestyle="--")
+        #if (type == "p"):
+        #    ax.axvline(begin + overlap_length, label="o", color="k", linestyle="--")
+        #else:
+        #    ax.axvline(end - overlap_length, label="o", color="k", linestyle="--")
 
         ax.axhline(int(pile["m"]), label="m", color="m", linestyle=":")
         ax.axhline(int(pile["p10"]), label="p10", color="c", linestyle=":")
-        ax.set_title(title)
+        #ax.set_title(title)
 
     def run(self):
         try:
@@ -74,14 +74,21 @@ class Plotter:
 
         if ("nodes" not in data or not data["nodes"]):
             for pile in data["piles"]:
-                figure, ax = matplotlib.pyplot.subplots(1, 1, figsize=(7.5, 5))
+                # change here if you do not need one of the figures
+                figure, ax = matplotlib.pyplot.subplots(1, 2, figsize=(15, 5))
 
                 Plotter.plot_pile(data["piles"][pile], 0, 0, "p", str(pile),\
-                    self.ylimit, ax)
+                    self.ylimit, ax[0])
+
+                points = data["piles"][pile]["p"]
+                for i in range(0, len(points), 2):
+                    ax[1].plot(points[i], (i / 2) + 1, 'bo', markersize = 2)
+                    ax[1].plot(points[i + 1], (i / 2) + 1, 'ro', markersize = 2)
+                # until here
 
                 figure.text(0.5, 0.04, "base", ha="center")
                 figure.text(0.04, 0.5, "coverage", va="center", rotation="vertical")
-                matplotlib.pyplot.legend(loc="best")
+                #matplotlib.pyplot.legend(loc="best")
                 matplotlib.pyplot.savefig(self.out_path + str(pile) + ".png")
                 matplotlib.pyplot.close(figure)
 

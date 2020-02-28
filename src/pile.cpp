@@ -58,7 +58,7 @@ std::unique_ptr<Pile> createPile(uint64_t id, uint32_t read_length) {
 Pile::Pile(uint64_t id, uint32_t read_length)
         : id_(id), begin_(0), end_(read_length), p10_(0), median_(0),
         data_(end_ - begin_, 0), repeat_hills_(), repeat_hill_coverage_(),
-        chimeric_pits_(), chimeric_hills_(), chimeric_hill_coverage_() {
+        chimeric_pits_(), chimeric_hills_(), chimeric_hill_coverage_(), points_() {
 }
 
 std::vector<std::pair<uint32_t, uint32_t>> Pile::find_slopes(double q) {
@@ -276,6 +276,11 @@ void Pile::add_layers(std::vector<uint32_t>& overlap_bounds) {
     if (overlap_bounds.empty()) {
         return;
     }
+
+    for (std::uint32_t i = 0; i < overlap_bounds.size(); i += 2) {
+        points_.emplace_back(overlap_bounds[i] >> 1, overlap_bounds[i + 1] >> 1);
+    }
+    std::sort(points_.begin(), points_.end());
 
     std::sort(overlap_bounds.begin(), overlap_bounds.end());
 
@@ -659,7 +664,16 @@ std::string Pile::to_json() const {
     */
 
     ss << "\"m\":" << median_ << ",";
-    ss << "\"p10\":" << p10_;
+    ss << "\"p10\":" << p10_ << ",";
+
+    ss << "\"p\":[";
+    for (uint32_t i = 0; i < points_.size(); ++i) {
+        ss << points_[i].first << "," << points_[i].second;
+        if (i < points_.size() - 1) {
+            ss << ",";
+        }
+    }
+    ss << "]";
     ss << "}";
 
     return ss.str();

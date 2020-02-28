@@ -59,6 +59,7 @@ public:
      */
     void clear() {
         std::fill(data_.begin() + begin_, data_.begin() + end_, 0);
+        points_.clear();
     }
 
     /*!
@@ -167,6 +168,7 @@ private:
     std::vector<std::pair<uint32_t, uint32_t>> chimeric_pits_;
     std::vector<std::pair<uint32_t, uint32_t>> chimeric_hills_;
     std::vector<uint32_t> chimeric_hill_coverage_;
+    std::vector<std::pair<uint32_t, uint32_t>> points_;
 };
 
 }

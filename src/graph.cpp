@@ -1084,8 +1084,6 @@ void Graph::preprocess(std::vector<std::unique_ptr<Overlap>>& overlaps) {
     osn.close();
     osr.close();
 
-    exit(1);
-
     for (auto& it: overlaps) {
         if (it->trim(piles_) == false) {
             it.reset();
