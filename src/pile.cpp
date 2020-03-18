@@ -323,6 +323,15 @@ bool Pile::shrink(uint32_t begin, uint32_t end) {
     }
     end_ = end;
 
+    std::vector<std::pair<uint32_t, uint32_t>> new_points;
+    for (const auto& it: points_) {
+        if (it.first > end_ || it.second < begin_) {
+            continue;
+        }
+        new_points.emplace_back(std::max(begin_, it.first),
+            std::min(end_, it.second));
+    }
+
     return true;
 }
 
@@ -668,7 +677,7 @@ std::string Pile::to_json() const {
 
     ss << "\"p\":[";
     for (uint32_t i = 0; i < points_.size(); ++i) {
-        ss << points_[i].first << "," << points_[i].second;
+        ss << points_[i].first - begin_ << "," << points_[i].second - begin_;
         if (i < points_.size() - 1) {
             ss << ",";
         }
