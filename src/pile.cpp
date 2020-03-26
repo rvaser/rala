@@ -331,6 +331,7 @@ bool Pile::shrink(uint32_t begin, uint32_t end) {
         new_points.emplace_back(std::max(begin_, it.first),
             std::min(end_, it.second));
     }
+    points_.swap(new_points);
 
     return true;
 }
